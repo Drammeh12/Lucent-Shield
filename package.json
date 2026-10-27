@@ -1,0 +1,19 @@
+{
+  "name": "lucent-shield",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Defensive application-security scanner by Bash Lucent. Scans code and sites you own or are authorised to test, finds vulnerabilities, and tells you how to fix them.",
+  "type": "module",
+  "bin": {
+    "lucent-shield": "src/cli.ts"
+  },
+  "scripts": {
+    "scan": "tsx src/cli.ts"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "tsx": "4.23.12"
+  }
+}

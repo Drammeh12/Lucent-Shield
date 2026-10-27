@@ -12,7 +12,7 @@ export const SEVERITY_RANK: Record<Severity, number> = {
   info: 4,
 };
 
-export type Category = "secret" | "dependency" | "code" | "web";
+export type Category = "secret" | "dependency" | "code" | "web" | "forensic";
 
 export interface Finding {
   /** Stable short id for the rule that produced this, e.g. "secret.aws-key". */

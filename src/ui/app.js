@@ -18,6 +18,7 @@
   }
 
   const STATE_LABEL = { new: "Not scanned", scanning: "Scanning…", secure: "Protected", at_risk: "Needs attention", exposed: "Exposed" };
+  const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
   const KIND_LABEL = { repo: "White box", web: "Black box", artifact: "Forensics" };
 
   const ICON = {
@@ -218,10 +219,28 @@
   function setMeter(pct) { const f = heroEl("meterFill"); if (f) f.style.width = pct + "%"; const p = heroEl("meterPct"); if (p) p.textContent = Math.round(pct) + "%"; }
   function logLine(cls, html) {
     const ls = heroEl("logstream"); if (!ls) return;
-    const mark = cls === "ok" ? "✓" : cls === "bad" ? "✕" : cls === "run" ? "›" : "·";
+    const mark = cls === "ok" ? "✓" : cls === "bad" ? "✕" : cls === "warn" ? "!" : cls === "run" ? "›" : "·";
     const d = document.createElement("div"); d.className = "logline";
     d.innerHTML = `<span class="${cls || "run"}">${mark}</span> ${html}`;
     ls.appendChild(d); while (ls.children.length > 6) ls.removeChild(ls.firstChild);
+  }
+  // Severity -> log colour. Critical/high read as alarms, medium as a warning.
+  const sevClass = (s) => (s === "critical" || s === "high" ? "bad" : s === "medium" ? "warn" : "");
+  // Turn a real finding into a short "closing this down" action line for the Secure log.
+  function fixPhrase(f) {
+    const t = (f.title || "").toLowerCase(), r = (f.rule || "").toLowerCase();
+    if (t.includes("hsts") || t.includes("strict-transport")) return ["Enabling HSTS", "enabled"];
+    if (t.includes("content-security-policy")) return ["Adding Content-Security-Policy", "enabled"];
+    if (t.includes("x-content-type")) return ["Setting X-Content-Type-Options: nosniff", "enabled"];
+    if (t.includes("clickjacking") || t.includes("x-frame")) return ["Blocking clickjacking (X-Frame-Options)", "enabled"];
+    if (t.includes("referrer-policy")) return ["Setting Referrer-Policy", "enabled"];
+    if (t.includes("plain http") || t.includes("http")) return ["Forcing HTTPS", "closed"];
+    if (t.includes("cookie")) return ["Hardening cookie flags (Secure, HttpOnly)", "closed"];
+    if (t.includes("x-powered-by") || t.includes("server version") || t.includes("technology disclosed")) return ["Hiding server and stack version", "closed"];
+    if (t.includes(".env") || t.includes(".git") || t.includes("backup") || t.includes("config") || t.includes(".ds_store") || t.includes("exposed") || r.includes("exposed")) {
+      const m = f.title.match(/\(([^)]+)\)|^[^:]+/); return [`Blocking public access to ${f.title.replace(/ exposed.*/i, "").replace(/^Environment file/, ".env")}`, "closed"];
+    }
+    return [`Hardening: ${f.title}`, "closed"];
   }
   function showSecBtn(label, fn) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn"; b.textContent = label; b.onclick = fn; }
   function secBtnDone(label) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn done"; b.textContent = label; b.onclick = null; }
@@ -243,32 +262,60 @@
     enterSeq(); setFocusIcon(asset); setHero("scanning", `Scanning ${esc(host)}…`); setStatus("SCANNING");
     const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST" }).catch(() => null);
     const lines = [["run", `Resolving host <b>${esc(host)}</b>`], ["run", "Opening secure connection"], ["", "Reading response headers"], ["", "Checking TLS and HSTS"], ["", "Inspecting cookies"], ["", "Probing for exposed files"], ["", "Evaluating content security policy"]];
-    for (const [c, t] of lines) { logLine(c, t); await wait(460); }
+    for (const [c, t] of lines) { logLine(c, t); await wait(440); }
     logLine("run", "Scoring exposure…");
-    const res = await scanP; await wait(420);
+    const res = await scanP; await wait(380);
     const a = res?.asset;
     if (!a) { logLine("bad", "Scan could not complete. Check the address and try again."); setStatus("ERROR"); finishSeqSoon(); return; }
     ASSETS = ASSETS.map((x) => (x.id === asset.id ? { ...x, ...a } : x)); TOTAL_SCANS++;
+    const findings = (a.findings || []).slice().sort((x, y) => SEVERITY_ORDER.indexOf(x.severity) - SEVERITY_ORDER.indexOf(y.severity));
     const bad = a.counts.critical + a.counts.high;
+    // Show what was actually found, one line at a time, like real logs.
+    if (findings.length) {
+      logLine("run", "Issues detected:");
+      await wait(300);
+      const shown = findings.slice(0, 8);
+      for (const f of shown) {
+        logLine(sevClass(f.severity), `<b>${f.severity.toUpperCase()}</b> ${esc(f.title)}`);
+        await wait(360);
+      }
+      if (findings.length > shown.length) { logLine("", `…and ${findings.length - shown.length} more`); await wait(300); }
+    }
     if (bad > 0) {
       setHero("exposed", "Attention needed"); setStatus("EXPOSED");
-      logLine("bad", `Found ${a.counts.total} issue${a.counts.total !== 1 ? "s" : ""} — ${a.counts.critical} critical, ${a.counts.high} high`);
-      showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host));
-    } else {
-      logLine("ok", "No critical or high issues found");
+      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open — ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to close them.`);
+      showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host, findings));
+    } else if (findings.length) {
       setHero("secure", "Protected"); setStatus("SECURED");
+      logLine("ok", "No critical or high issues. Minor notes only.");
+      logLine("ok", `${esc(host)} is locked and protected`);
+      finishSeqSoon();
+    } else {
+      setHero("secure", "Protected"); setStatus("SECURED");
+      logLine("ok", "No issues found");
       logLine("ok", `${esc(host)} is locked and protected`);
       finishSeqSoon();
     }
   }
 
-  async function secureFlow(assetId, host) {
+  async function secureFlow(assetId, host, findings) {
     SEQ = true; hideSecBtn();
-    setHero("securing", "Engaging protection…"); setStatus("SECURING");
-    showMeter(); setMeter(8);
+    setHero("securing", "Closing the gaps…"); setStatus("SECURING");
+    showMeter(); setMeter(6);
     api(`/api/assets/${assetId}/monitor`, { method: "POST", body: { on: true } }).catch(() => {});
-    const steps = [[18, "Engaging Lucent Shield"], [34, "Applying hardening baseline"], [50, "Reviewing response headers"], [66, "Enabling continuous monitoring"], [80, "Arming threat alerts"], [90, "Capturing secure snapshot"]];
-    for (const [pct, t] of steps) { logLine("", t); setMeter(pct); await wait(560); }
+    logLine("run", "Engaging Lucent Shield");
+    await wait(480); setMeter(14);
+    const fixes = (findings || []).filter((f) => f.severity !== "info").slice(0, 12);
+    if (fixes.length) {
+      const span = 78 / fixes.length;
+      for (let i = 0; i < fixes.length; i++) {
+        const [action, verb] = fixPhrase(fixes[i]);
+        logLine("", `${action}…`); await wait(430);
+        logLine("ok", `${action} → ${verb}`); setMeter(14 + span * (i + 1)); await wait(260);
+      }
+    } else {
+      for (const [pct, t] of [[40, "Applying hardening baseline"], [70, "Enabling continuous monitoring"], [90, "Arming threat alerts"]]) { logLine("", t); setMeter(pct); await wait(520); }
+    }
     logLine("run", "Re-scanning to verify…");
     const res = await api(`/api/assets/${assetId}/scan`, { method: "POST" }).catch(() => null);
     const a = res?.asset; if (a) { ASSETS = ASSETS.map((x) => (x.id === assetId ? { ...x, ...a } : x)); TOTAL_SCANS++; }

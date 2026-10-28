@@ -270,7 +270,7 @@ a { color: var(--green); text-decoration: none; }
 .logstream { font: 12px/1.7 var(--mono); background: #05080f; border: 1px solid var(--line); border-radius: 12px;
   padding: 12px 14px; height: 132px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
 .logline { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; animation: logIn .25s forwards; }
-.logline .ok { color: var(--green); } .logline .bad { color: #ff8a8a; } .logline .run { color: var(--cyan); }
+.logline .ok { color: var(--green); } .logline .bad { color: #ff8a8a; } .logline .warn { color: var(--amber); } .logline .run { color: var(--cyan); }
 .logline b { color: #cdd8f0; font-weight: 600; }
 @keyframes logIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 .secbtn { margin-top: 13px; background: linear-gradient(90deg, var(--red), #b91c1c); color: #fff; font-weight: 700;

@@ -18,9 +18,11 @@ const RANK: Record<Shield, number> = { secure: 0, at_risk: 1, exposed: 2, new: -
 
 let running = false;
 
-function dueForScan(asset: Asset): boolean {
+export function dueForScan(asset: Asset): boolean {
   if (!asset.monitor) return false;
-  if (!asset.lastScanAt) return true;
+  // Never without proof of ownership, and never before the owner's own authorised first scan.
+  if (asset.kind === "web" && !asset.verified) return false;
+  if (!asset.lastScanAt) return false;
   const age = Date.now() - Date.parse(asset.lastScanAt);
   return age >= INTERVAL_MIN * 60_000;
 }
@@ -43,6 +45,12 @@ async function dispatch(message: string, extra: object): Promise<void> {
   }
 }
 
+export function summary(a: Asset): string {
+  const c = a.counts, n = c.critical + c.high + c.medium + c.low;
+  if (!n) return "no issues";
+  return [c.critical && `${c.critical} critical`, c.high && `${c.high} high`, c.medium && `${c.medium} medium`, c.low && `${c.low} low`].filter(Boolean).join(", ");
+}
+
 // The webhook belongs to whoever runs this server, so only their own assets are sent to it.
 function isAdminOwned(asset: Asset): boolean {
   return !!asset.ownerId && scanOptionsFor(asset.ownerId).admin === true;
@@ -61,6 +69,7 @@ async function scanOne(asset: Asset): Promise<void> {
     store.endScan(asset.id);
   }
   if (!updated) return;
+  if (updated.ownerId) store.addEvent({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: "autoscan", shield: updated.shield, text: `Protection check of ${updated.name}: ${summary(updated)}` });
 
   const afterHighCrit = updated.counts.critical + updated.counts.high;
   const worse = RANK[updated.shield] > RANK[beforeShield] || afterHighCrit > beforeHighCrit;
@@ -98,6 +107,8 @@ async function tick(): Promise<void> {
 }
 
 export function startMonitor(): void {
+  const reset = store.resetUnverifiedScans();
+  if (reset) console.log(`Monitor: cleared results of ${reset} website(s) scanned before ownership was proven.`);
   console.log(`Monitor: re-scanning watched assets every ${INTERVAL_MIN} min${WEBHOOK ? " (alerts also sent to the configured webhook)" : ""}.`);
   // Check on the tick which assets are due; the interval decides the rest.
   setInterval(() => void tick(), TICK_MS);

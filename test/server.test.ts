@@ -187,6 +187,29 @@ test("forensics needs a legal attestation and a reference", async () => {
   assert.equal(log[0].reference, "WARRANT-2026-014");
 });
 
+test("protect needs a scan first, proven ownership, and its own recorded permission", async () => {
+  // Code asset: scanned earlier in this file by the admin.
+  const code = (await call("/api/assets")).data.assets.find((a: any) => a.kind === "repo" && a.lastScanAt);
+  assert.equal(code.monitor, false, "nothing is watched until the owner presses Protect");
+  assert.equal((await call(`/api/assets/${code.id}/monitor`, { method: "POST", body: { on: true } })).status, 403, "needs explicit permission");
+  const on = await call(`/api/assets/${code.id}/monitor`, { method: "POST", body: { on: true, authorized: true } });
+  assert.equal(on.status, 200);
+  assert.equal(on.data.asset.monitor, true);
+  const log = JSON.parse(readFileSync(join(dataDir, "authorizations.json"), "utf8"));
+  assert.equal(log[0].reference, "Continuous protection (Protect)");
+
+  // An unverified website can never be protected (so it is never scanned in the background).
+  const site = (await call("/api/assets", { method: "POST", body: { name: "unproven", kind: "web", target: "https://unproven.example", authorized: true } })).data.asset;
+  assert.equal((await call(`/api/assets/${site.id}/monitor`, { method: "POST", body: { on: true, authorized: true } })).status, 403);
+
+  // Recent activity holds only real events.
+  const ev = (await call("/api/activity")).data.events;
+  assert.ok(ev.some((e: any) => e.type === "protect-on" && e.assetId === code.id));
+  assert.ok(ev.some((e: any) => e.type === "added" && e.assetId === site.id));
+  assert.ok(!ev.some((e: any) => e.type === "scan" && e.assetId === site.id), "no scan is reported for the unproven site");
+  assert.equal((await call("/api/activity", { headers: { cookie: bob } })).data.events.length, 0, "each account sees only its own activity");
+});
+
 test("the same asset cannot be scanned twice at once", async () => {
   // Mark a website as verified directly in storage, then race two scans.
   const add = await call("/api/assets", { method: "POST", body: { name: "slow", kind: "web", target: slowUrl, authorized: true } });

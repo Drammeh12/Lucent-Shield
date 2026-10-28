@@ -12,7 +12,8 @@ import { resolveTxt } from "node:dns/promises";
 import { store, publicUser, type User } from "./store.ts";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, isAdminUser, scanOptionsFor } from "./access.ts";
 import { newTotpSecret, otpauthUri, verifyCode, newRecoveryCodes, hashRecovery } from "./totp.ts";
-import { startMonitor } from "./monitor.ts";
+import { startMonitor, summary } from "./monitor.ts";
+import { isBlockedHost } from "../scanners/web.ts";
 import { runScan, isGitUrl, VERSION, type AssetKind } from "../engine.ts";
 import { classify } from "../catalog.ts";
 import { toHtml, toMarkdown, toJson, type ReportContext } from "../report.ts";
@@ -197,14 +198,28 @@ async function verifyDomain(target: string, token: string): Promise<{ ok: boolea
   let u: URL;
   try { u = new URL(target.includes("://") ? target : `https://${target}`); } catch { return { ok: false }; }
 
+  if (await isBlockedHost(u.hostname)) return { ok: false };
   // File method — use the full host (with port if any); also try plain HTTP.
+  // Many hosts (Vercel, Netlify) send example.com to www.example.com or the
+  // reverse; one such hop within the same domain is followed.
+  const bare = (h: string) => h.replace(/^www\./, "");
   const bases = [`${u.protocol}//${u.host}`];
   if (u.protocol === "https:") bases.push(`http://${u.host}`);
   for (const base of bases) {
-    try {
-      const r = await fetch(`${base}/.well-known/lucent-verify.txt`, { redirect: "manual", signal: AbortSignal.timeout(8000) });
-      if (r.ok) { const t = (await r.text()).trim(); if (t.includes(token)) return { ok: true, method: "file" }; }
-    } catch { /* try next */ }
+    let url = `${base}/.well-known/lucent-verify.txt`;
+    for (let hop = 0; hop < 3; hop++) {
+      try {
+        const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(8000) });
+        if (r.status >= 300 && r.status < 400 && r.headers.get("location")) {
+          const next = new URL(r.headers.get("location")!, url);
+          if (bare(next.hostname) !== bare(u.hostname) || !next.pathname.endsWith("/.well-known/lucent-verify.txt")) break;
+          url = next.href;
+          continue;
+        }
+        if (r.ok) { const t = (await r.text()).slice(0, 2000).trim(); if (t.includes(token)) return { ok: true, method: "file" }; }
+      } catch { /* try next */ }
+      break;
+    }
   }
   // DNS TXT method (per hostname, no port).
   try {
@@ -434,6 +449,10 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 404, { error: "not found" });
   }
 
+  if (path === "/api/activity" && method === "GET") {
+    return json(res, 200, { events: store.events(user.id, 50) });
+  }
+
   if (path === "/api/alerts" && method === "GET") {
     return json(res, 200, { alerts: store.listAlerts(user.id), unread: store.unreadAlerts(user.id) });
   }
@@ -461,6 +480,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       return json(res, 400, { error: "Enter the repository's web address, for example https://github.com/you/your-repo." });
     }
     const asset = store.add({ ownerId: user.id, name, kind, target, authorized: kind === "web" ? true : !!body.authorized });
+    store.addEvent({ ownerId: user.id, assetId: asset.id, assetName: asset.name, type: "added", text: `Added ${asset.name}${kind === "web" ? ". Waiting for proof of ownership" : ""}` });
     const { findings, ...rest } = asset;
     return json(res, 200, { asset: rest });
   }
@@ -476,7 +496,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       if (asset.kind !== "web") return json(res, 400, { error: "Only websites need ownership verification." });
       if (asset.verified) return json(res, 200, { verified: true, method: "already" });
       const r = await verifyDomain(asset.target, asset.verifyToken);
-      if (r.ok) { store.setVerified(id, true); return json(res, 200, { verified: true, method: r.method }); }
+      if (r.ok) {
+        store.setVerified(id, true);
+        store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: "verified", text: `Ownership of ${asset.name} proven (${r.method === "dns" ? "DNS record" : "file on the site"})` });
+        return json(res, 200, { verified: true, method: r.method });
+      }
       return json(res, 200, { verified: false });
     }
 
@@ -501,14 +525,27 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: String(body.reference ?? "").trim().slice(0, 200) || undefined });
         const result = await runScan(asset.kind, asset.target, scanOptionsFor(asset.ownerId));
         const updated = store.saveScan(id, result);
+        if (updated) store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: "scan", shield: updated.shield, text: `Scanned ${asset.name}: ${summary(updated)}` });
         return json(res, 200, { asset: updated });
       } finally {
         store.endScan(id);
       }
     }
+    // Protect = continuous monitoring. Turning it on is a standing authorization
+    // to re-scan this asset on a schedule, so it is confirmed and recorded.
     if (idMatch[2] === "/monitor" && method === "POST") {
       const body = await readBody(req);
-      const updated = store.setMonitor(id, body.on !== false);
+      const on = body.on !== false;
+      if (on) {
+        if (body.authorized !== true) return json(res, 403, { error: "Confirm you authorise Lucent Shield to keep checking this asset." });
+        if (asset.kind === "web" && !asset.verified) return json(res, 403, { error: "Verify that you own this domain first." });
+        if (!asset.lastScanAt) return json(res, 400, { error: "Scan it first, then protect it." });
+        if (asset.shield === "new") return json(res, 400, { error: "The last scan could not reach it. Scan it again first." });
+        if (asset.kind === "artifact") return json(res, 400, { error: "Forensic artifacts are examined once, not monitored." });
+        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: "Continuous protection (Protect)" });
+      }
+      const updated = store.setMonitor(id, on);
+      if (updated && updated.monitor !== asset.monitor) store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: on ? "protect-on" : "protect-off", text: on ? `Protection turned on for ${asset.name}` : `Protection paused for ${asset.name}` });
       return json(res, 200, { asset: updated });
     }
     // Downloadable report of the last scan: ?format=html|md|json
@@ -547,6 +584,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
     if (method === "DELETE") {
       store.remove(id);
+      store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: "removed", text: `Removed ${asset.name}` });
       return json(res, 200, { ok: true });
     }
   }

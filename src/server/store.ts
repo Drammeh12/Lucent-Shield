@@ -43,7 +43,8 @@ export interface Asset {
   verified: boolean;
   /** The token the operator publishes (DNS or file) to prove domain ownership. */
   verifyToken: string;
-  /** Re-scan this asset automatically on the monitor schedule. */
+  /** Protected: re-scan automatically on the monitor schedule. Turned on only
+   *  by the owner pressing Protect, which records a standing authorization. */
   monitor: boolean;
   createdAt: string;
   lastScanAt: string | null;
@@ -74,6 +75,10 @@ const META_FILE = join(DATA_DIR, "meta.json");
 const AUTH_FILE = join(DATA_DIR, "authorizations.json");
 const LOGINS_FILE = join(DATA_DIR, "logins.json");
 const USERS_FILE = join(DATA_DIR, "users.json");
+const EVENTS_FILE = join(DATA_DIR, "events.json");
+
+export type EventType = "added" | "verified" | "scan" | "autoscan" | "protect-on" | "protect-off" | "removed";
+export interface ActivityEvent { id: string; ownerId: string; assetId: string; assetName: string; type: EventType; text: string; at: string; shield?: string }
 
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 function hashPassword(password: string, salt: string): string {
@@ -253,7 +258,7 @@ export const store = {
       // artifact is already on the operator's own machine.
       verified: !web,
       verifyToken: web ? randomUUID().replace(/-/g, "") : "",
-      monitor: true,
+      monitor: false,
       createdAt: new Date().toISOString(),
       lastScanAt: null,
       shield: "new",
@@ -341,6 +346,33 @@ export const store = {
     const list = readJson<any[]>(AUTH_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(AUTH_FILE, list.slice(0, 1000));
+  },
+
+  /** What happened to an account's assets, for its Recent activity. Only real events. */
+  addEvent(e: Omit<ActivityEvent, "id" | "at">): void {
+    const list = readJson<ActivityEvent[]>(EVENTS_FILE, []);
+    list.unshift({ ...e, id: randomUUID(), at: new Date().toISOString() });
+    writeJson(EVENTS_FILE, list.slice(0, 3000));
+  },
+  events(ownerId: string, limit = 50): ActivityEvent[] {
+    return readJson<ActivityEvent[]>(EVENTS_FILE, []).filter((e) => e.ownerId === ownerId).slice(0, limit);
+  },
+
+  /**
+   * Websites that were scanned before their owner proved control of the domain
+   * (possible in older versions through monitoring) lose those results and stop
+   * being watched until they are verified and scanned with authorization.
+   */
+  resetUnverifiedScans(): number {
+    const assets = load();
+    let n = 0;
+    for (const a of assets) {
+      if (a.kind === "web" && !a.verified && (a.lastScanAt || a.monitor)) {
+        a.lastScanAt = null; a.findings = []; a.counts = countBySeverity([]); a.shield = "new"; a.monitor = false; n++;
+      }
+    }
+    if (n) persist(assets);
+    return n;
   },
 
   /** The authorization audit trail, newest first. */

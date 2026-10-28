@@ -20,7 +20,7 @@
     return data;
   }
 
-  const STATE_LABEL = { new: "Not scanned", scanning: "Scanning…", secure: "Protected", at_risk: "Needs attention", exposed: "Exposed" };
+  const STATE_LABEL = { new: "Not scanned", scanning: "Scanning…", secure: "No issues", at_risk: "Needs attention", exposed: "Exposed" };
   const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
   const KIND_LABEL = { repo: "White box", web: "Black box", artifact: "Forensics" };
 
@@ -54,7 +54,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web";
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -65,8 +65,7 @@
   }
   // Which asset the big padlock represents right now.
   function focusAsset() {
-    return ASSETS.find((a) => a.shield === "scanning") || ASSETS.find((a) => a.shield === "exposed")
-      || ASSETS.find((a) => a.kind === "web") || ASSETS[0] || null;
+    return ASSETS.find((a) => a.id === FOCUS) || ASSETS.find((a) => a.shield === "scanning") || ASSETS[0] || null;
   }
 
   // ---------- shell ----------
@@ -114,162 +113,321 @@
   }
 
   // ---------- dashboard ----------
-  function heroState() {
-    if (ASSETS.some((a) => a.shield === "scanning")) return "scanning";
-    if (ASSETS.some((a) => a.shield === "exposed")) return "exposed";
-    if (ASSETS.length && ASSETS.every((a) => a.shield === "secure")) return "secure";
-    return "new";
+  // The dashboard follows the real order of work: 1) choose a scan type and
+  // scan, watching the findings stream in, 2) protect the asset, which closes
+  // the padlock and keeps watching it. The padlock always shows ONE asset.
+  const SCAN_TYPES = [
+    { kind: "repo", icon: "code", title: "White box", sub: "Your code: secrets, risky code, vulnerable packages", ph: "https://github.com/you/your-repo", btn: "Scan code" },
+    { kind: "web", icon: "mask", title: "Black box", sub: "Your live website, seen from outside", ph: "https://yoursite.com", btn: "Scan website" },
+    { kind: "artifact", icon: "finger", title: "Forensics", sub: "Examine a file on this server", ph: "/path/to/evidence", btn: "Examine" },
+  ];
+  const typesFor = () => SCAN_TYPES.filter((t) => ADMIN || t.kind !== "artifact");
+  const openBad = (a) => (a?.counts?.critical || 0) + (a?.counts?.high || 0);
+  const openAny = (a) => openBad(a) + (a?.counts?.medium || 0) + (a?.counts?.low || 0);
+  const hostOf = (t) => String(t || "").replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+
+  /** What the padlock shows for one asset. Closed only when it is protected. */
+  function lockState(a) {
+    if (!a) return "new";
+    if (a.shield === "scanning") return "scanning";
+    if (!a.lastScanAt) return a.kind === "web" && !a.verified ? "unverified" : "new";
+    if (a.shield === "new") return "unreached";
+    if (a.monitor) return openBad(a) ? "watching" : "secure";
+    if (openBad(a)) return "exposed";
+    if (openAny(a)) return "at_risk";
+    return "ready";
   }
+  const LOCK_WORD = { unreached: "NOT REACHED", new: "", unverified: "NOT VERIFIED", scanning: "SCANNING", exposed: "EXPOSED", at_risk: "OPEN", ready: "NOT PROTECTED", watching: "PROTECTED", secure: "SECURED", securing: "LOCKING" };
 
   function statsView() {
-    const total = ASSETS.length, secure = ASSETS.filter((a) => a.shield === "secure").length, exposed = ASSETS.filter((a) => a.shield === "exposed").length;
+    const total = ASSETS.length, prot = ASSETS.filter((a) => a.monitor).length, exposed = ASSETS.filter((a) => openBad(a) > 0).length;
     const stat = (cls, icon, label, n, sub, subcls = "") => `<div class="stat"><div class="si ${cls}">${ic(icon, 20)}</div><div><div class="l">${label}</div><div class="n">${n}</div><div class="sub ${subcls}">${sub}</div></div></div>`;
     return `<div class="stats">
-      ${stat("blue", "globe", "Total assets", total, `${ASSETS.filter(a=>!a.lastScanAt).length} awaiting scan`)}
-      ${stat("green", "shield", "Protected", secure, "Currently secured", "ok")}
-      ${stat("red", "alert", "Exposed", exposed, exposed ? "Needs attention" : "All clear", exposed ? "bad" : "ok")}
-      ${stat("violet", "radar", "Total scans", TOTAL_SCANS, "since you started")}
+      ${stat("blue", "globe", "Assets", total, `${ASSETS.filter((a) => !a.lastScanAt).length} not scanned yet`)}
+      ${stat("green", "shield", "Protected", prot, prot ? "Watched around the clock" : "Press Protect after a scan", prot ? "ok" : "")}
+      ${stat("red", "alert", "Exposed", exposed, exposed ? "Critical or high issues open" : "No critical or high issues", exposed ? "bad" : "ok")}
+      ${stat("violet", "radar", "Scans run", TOTAL_SCANS, "by your account")}
     </div>`;
   }
 
+  function shieldLockSvg() {
+    return `<svg class="biglock" viewBox="0 0 160 180" aria-hidden="true">
+      <ellipse class="glow" cx="80" cy="98" rx="70" ry="64"/>
+      <path class="shield" d="M80 6 L146 30 V84 C146 128 118 160 80 174 C42 160 14 128 14 84 V30 Z"/>
+      <g transform="translate(35 40) scale(.75)">
+        <path class="shackle" d="M38 58 V42 a22 22 0 0 1 44 0 V58"/>
+        <rect class="body" x="26" y="58" width="68" height="62" rx="14"/>
+        <circle class="keyhole" cx="60" cy="86" r="7"/><rect class="stem" x="57" y="88" width="6" height="16" rx="3"/>
+      </g>
+    </svg>`;
+  }
+
+  function lockView(a, st) {
+    return `<div class="herolock ${st}" id="herolock">
+      <div class="halo"></div><div class="rings"></div>
+      <div class="orbit">
+        <svg class="wires" viewBox="-160 -160 320 320" aria-hidden="true">
+          <circle class="track" cx="0" cy="0" r="140"/>
+          <line class="wire" x1="0" y1="-92" x2="0" y2="-140"/><line class="wire" x1="80" y1="0" x2="140" y2="0"/>
+          <line class="wire" x1="0" y1="92" x2="0" y2="140"/><line class="wire" x1="-80" y1="0" x2="-140" y2="0"/>
+        </svg>
+        <span class="node nT"><span class="lbl">${ic("code", 18)}</span></span>
+        <span class="node nR"><span class="lbl">API</span></span>
+        <span class="node nB"><span class="lbl">${ic("db", 18)}</span></span>
+        <span class="node nL"><span class="lbl">${ic("server", 18)}</span></span>
+      </div>
+      ${flowIcon(a)}
+      <div class="scanline"></div>
+      ${shieldLockSvg()}
+      <div class="statusword" id="statusword">${LOCK_WORD[st] || ""}</div>
+      ${a ? `<div class="lockname">${esc(a.name)}</div>` : ""}
+    </div>`;
+  }
+
+  /** The panel under the log: what to do next with the asset on the padlock. */
+  function nextStep(a) {
+    if (!a) return "";
+    const st = lockState(a);
+    if (st === "unverified") return `<div class="next">
+      <div class="nt"><b>Prove you own ${esc(hostOf(a.target))}</b><span>Lucent Shield scans a website only after its owner proves control of it.</span></div>
+      <button class="btn" data-act="verify" data-id="${a.id}">Verify ownership</button></div>`;
+    if (!a.lastScanAt) return `<div class="next"><div class="nt"><b>${esc(a.name)} is ready to scan</b></div><button class="btn" data-act="scan" data-id="${a.id}">Scan now</button></div>`;
+    if (st === "unreached") return `<div class="next">
+      <div class="nt"><b>${esc(a.name)} could not be checked</b><span>${a.kind === "web" ? "The site did not answer. Check the address is right and the site is online, then scan again." : "The repository could not be downloaded. Check the address. Private repositories cannot be read yet."}</span></div>
+      <button class="btn" data-act="scan" data-id="${a.id}">Scan again</button></div>`;
+    if (!a.monitor) return `<div class="next protect">
+      <div class="nt"><b>Protect ${esc(a.name)}</b><span>Lucent Shield keeps checking it every few hours and alerts you the moment something changes, like a new exposed file, a weakened setting or a new vulnerable package.</span></div>
+      <div class="na">${openAny(a) ? `<button class="ghost" data-act="report" data-id="${a.id}">See the fixes</button>` : ""}<button class="btn" data-act="protect" data-id="${a.id}">${ic("shield", 16)} Protect</button></div></div>`;
+    return `<div class="next on">
+      <div class="nt"><b>${openBad(a) ? `Protected, with ${openBad(a)} ${openBad(a) === 1 ? "fix" : "fixes"} still to make` : "Protected and secure"}</b>
+      <span>${openBad(a) ? "Lucent Shield is watching it. The padlock turns fully green once the critical and high issues are fixed and a scan confirms it." : "Lucent Shield is watching it and will alert you if anything changes."} Last checked ${timeAgo(a.lastScanAt)}.</span></div>
+      <div class="na"><button class="ghost" data-act="report" data-id="${a.id}">Report</button><button class="ghost" data-act="scan" data-id="${a.id}">Scan again</button></div></div>`;
+  }
+
   function heroView() {
-    const st = heroState();
-    const words = { secure: "All assets protected", exposed: "Attention needed", scanning: "Scanning your assets…", new: "Add an asset to protect" };
-    const lead = {
-      secure: "Lucent Shield is watching your assets around the clock. Everything is locked and secure.",
-      exposed: "One or more assets have open issues. Open them to see exactly what to fix.",
-      scanning: "Lucent Shield is actively scanning for secrets, vulnerabilities and exposed files.",
-      new: ADMIN ? "Protect a code repo, a website you own, or inspect a forensic artifact." : "Protect a code repository or a website you own.",
-    };
-    const focus = focusAsset();
+    const a = focusAsset();
+    const st = lockState(a);
+    const type = typesFor().find((t) => t.kind === SCAN_KIND) || typesFor()[1] || typesFor()[0];
+    const title = !a ? "Scan, then protect" : st === "secure" ? `${esc(a.name)} is protected` : st === "watching" ? `${esc(a.name)} is being watched` : st === "exposed" ? `${esc(a.name)} is exposed` : st === "unverified" ? `Verify ${esc(hostOf(a.target))}` : `${esc(a.name)}`;
+    const step = !a || !a.lastScanAt ? 1 : a.monitor ? 3 : 2;
     return `<div class="hero ${st}" id="hero">
       <div class="heroL">
-        <span class="live"><span class="dot"></span>Live protection</span>
-        <h1 id="heroTitle">${words[st]}</h1>
-        <p class="lead" id="heroLead">${lead[st]}</p>
+        <span class="live"><span class="dot"></span>${st === "secure" || st === "watching" ? "Live protection" : "Lucent Shield"}</span>
+        <h1 id="heroTitle">${title}</h1>
+        <ol class="stepper">
+          <li class="${step > 1 ? "done" : "on"}"><span>1</span>Scan</li>
+          <li class="${step === 2 ? "on" : step > 2 ? "done" : ""}"><span>2</span>Protect</li>
+        </ol>
+        <div class="types" role="tablist" aria-label="Scan type">${typesFor().map((t) => `<button role="tab" class="type ${t.kind === type.kind ? "on" : ""}" data-type="${t.kind}" aria-selected="${t.kind === type.kind}">${ic(t.icon, 16)}<span><b>${t.title}</b><small>${t.sub}</small></span></button>`).join("")}</div>
         <div class="scanbar" id="heroScanbar">
-          <div class="in">${ic("globe", 16)}<input id="quickUrl" placeholder="https://yoursite.com" maxlength="2000"></div>
-          <button class="go" id="quickGo">Protect</button>
+          <div class="in">${ic(type.kind === "repo" ? "code" : type.kind === "artifact" ? "finger" : "globe", 16)}<input id="quickUrl" placeholder="${type.ph}" maxlength="2000" aria-label="What to scan"></div>
+          <button class="go" id="quickGo">${type.btn}</button>
         </div>
-        <div class="seq" id="heroSeq" hidden>
-          <div class="meter" id="heroMeterWrap" hidden><i id="meterFill"></i></div>
-          <div class="mlabel" id="meterLabel" hidden><b id="meterPct">0%</b> of fixes ready</div>
-          <div class="logstream" id="logstream"></div>
-          <button class="secbtn" id="secBtn" hidden></button>
-        </div>
+        <div class="err" id="quickErr" role="alert"></div>
+        <div class="seq" id="heroSeq" hidden><div class="logstream" id="logstream"></div></div>
+        <div id="nextStep">${nextStep(a)}</div>
       </div>
-      <div class="herolock ${st}" id="herolock">
-        <div class="halo"></div><div class="rings"></div>
-        <div class="orbit">
-          <svg class="wires" viewBox="-140 -140 280 280" aria-hidden="true">
-            <circle class="track" cx="0" cy="0" r="120"/>
-            <line class="wire" x1="0" y1="0" x2="0" y2="-120"/><line class="wire" x1="0" y1="0" x2="120" y2="0"/>
-            <line class="wire" x1="0" y1="0" x2="0" y2="120"/><line class="wire" x1="0" y1="0" x2="-120" y2="0"/>
-          </svg>
-          <span class="node nT"><span class="lbl">${ic("code", 18)}</span></span>
-          <span class="node nR"><span class="lbl">API</span></span>
-          <span class="node nB"><span class="lbl">${ic("db", 18)}</span></span>
-          <span class="node nL"><span class="lbl">${ic("server", 18)}</span></span>
-        </div>
-        ${flowIcon(focus)}
-        <div class="scanline"></div>
-        ${lockSvg("biglock")}
-        <div class="statusword" id="statusword">${st === "secure" ? "SECURED" : st === "exposed" ? "EXPOSED" : st === "scanning" ? "SCANNING" : ""}</div>
-      </div>
+      ${lockView(a, st)}
     </div>`;
   }
 
   function dashboardView() {
-    const preview = ASSETS.slice(0, 4).map((a) => `<div class="row" data-open="${a.id}" style="cursor:pointer">
-      <span class="dotline" style="background:${a.shield === "secure" ? "var(--green)" : a.shield === "exposed" ? "var(--red)" : a.shield === "at_risk" ? "var(--amber)" : "var(--muted)"}"></span>
-      <div class="rt"><div class="t">${esc(a.name)}</div><div class="s">scanned ${timeAgo(a.lastScanAt)}</div></div>
-      <span class="tag ${a.shield}">${STATE_LABEL[a.shield]}</span></div>`).join("") || `<div class="empty">No assets yet.</div>`;
-
-    const scanTypes = [["repo", "code", "White box", "Full access · deep code analysis"], ["web", "mask", "Black box", "No access · external view"], ["artifact", "finger", "Forensics", "Investigate · collect evidence"]]
-      .filter(([k]) => ADMIN || k !== "artifact")
-      .map(([k, i, t, s]) => `<div class="row" data-kind="${k}" style="cursor:pointer"><div class="ri">${ic(i)}</div><div class="rt"><div class="t">${t}</div><div class="s">${s}</div></div><span class="chev">${ic("chev", 16)}</span></div>`).join("");
-
-    const activity = buildActivity().slice(0, 6).map((e) => `<div class="row"><span class="dotline" style="background:${e.color}"></span><div class="rt"><div class="t">${esc(e.text)}</div><div class="s">${timeAgo(e.when)}</div></div></div>`).join("") || `<div class="empty">No activity yet.</div>`;
-
-    return statsView() + heroView() + `<div class="cols">
+    const preview = ASSETS.slice(0, 5).map((a) => `<div class="row" data-focus="${a.id}" style="cursor:pointer">
+      <span class="dotline" style="background:${dotColor(a)}"></span>
+      <div class="rt"><div class="t">${esc(a.name)}</div><div class="s">${KIND_LABEL[a.kind]} · ${a.lastScanAt ? `scanned ${timeAgo(a.lastScanAt)}` : a.kind === "web" && !a.verified ? "ownership not verified" : "not scanned"}</div></div>
+      ${a.monitor ? `<span class="tag secure">Protected</span>` : a.lastScanAt ? `<span class="tag ${a.shield}">${STATE_LABEL[a.shield]}</span>` : `<span class="tag new">New</span>`}</div>`).join("") || `<div class="empty">Nothing yet. Choose a scan type above and scan something you own.</div>`;
+    const activity = buildActivity().slice(0, 7).map((e) => `<div class="row"><span class="dotline" style="background:${e.color}"></span><div class="rt"><div class="t">${esc(e.text)}</div><div class="s">${timeAgo(e.when)}</div></div></div>`).join("") || `<div class="empty">No activity yet.</div>`;
+    return statsView() + heroView() + `<div class="cols two">
       <div class="pnl"><div class="ph"><h3>${ic("assets", 16)} Your assets</h3><button class="all" data-view="assets">View all</button></div>${preview}</div>
-      <div class="pnl"><div class="ph"><h3>${ic("scans", 16)} Scan types</h3></div>${scanTypes}</div>
-      <div class="pnl"><div class="ph"><h3>${ic("reports", 16)} Recent activity</h3><button class="all" id="actAll">View all</button></div>${activity}</div>
+      <div class="pnl"><div class="ph"><h3>${ic("reports", 16)} Recent activity</h3><button class="all" id="actAll">Alerts</button></div>${activity}</div>
     </div>`;
   }
 
+  function dotColor(a) {
+    const st = lockState(a);
+    return st === "secure" ? "var(--green)" : st === "exposed" || st === "watching" && openBad(a) ? "var(--red)" : st === "at_risk" ? "var(--amber)" : "var(--muted)";
+  }
+
+  /** Only things that really happened, recorded by the server. */
   function buildActivity() {
-    const items = [];
+    const color = { added: "var(--muted)", verified: "var(--cyan)", "protect-on": "var(--green)", "protect-off": "var(--amber)", removed: "var(--muted)" };
+    const items = EVENTS.map((e) => ({ text: e.text, when: e.at, color: e.type === "scan" || e.type === "autoscan" ? (e.shield === "exposed" ? "var(--red)" : e.shield === "at_risk" ? "var(--amber)" : "var(--green)") : color[e.type] || "var(--muted)" }));
     for (const al of ALERTS) items.push({ text: al.message.replace(/^[🔓🔒]\s*Lucent Shield:\s*/, ""), when: al.at, color: al.type === "recovered" ? "var(--green)" : "var(--red)" });
-    for (const a of ASSETS) if (a.lastScanAt) items.push({ text: `Scan completed for ${a.name}`, when: a.lastScanAt, color: a.shield === "exposed" ? "var(--red)" : "var(--green)" });
     return items.sort((x, y) => new Date(y.when) - new Date(x.when));
   }
 
   function wireDashboard() {
     const go = document.getElementById("quickGo"), url = document.getElementById("quickUrl");
-    if (go) go.onclick = () => runScanSequence(url.value.trim());
-    if (url) url.onkeydown = (e) => { if (e.key === "Enter") runScanSequence(url.value.trim()); };
+    const run = () => startScan(SCAN_KIND, url.value.trim());
+    if (go) go.onclick = run;
+    if (url) url.onkeydown = (e) => { if (e.key === "Enter") run(); };
     document.getElementById("view").onclick = (e) => {
-      const kind = e.target.closest("[data-kind]")?.dataset.kind;
+      const t = e.target.closest("[data-type]")?.dataset.type;
+      if (t) { SCAN_KIND = t; renderView(); document.getElementById("quickUrl")?.focus(); return; }
+      const act = e.target.closest("[data-act]");
+      if (act) {
+        const a = ASSETS.find((x) => x.id === act.dataset.id); if (!a) return;
+        const k = act.dataset.act;
+        if (k === "verify") openVerify(a, (fresh) => runScan(fresh));
+        else if (k === "scan") runScan(a);
+        else if (k === "protect") protect(a);
+        else if (k === "report") openReport(a.id);
+        return;
+      }
+      const f = e.target.closest("[data-focus]")?.dataset.focus;
+      if (f) { FOCUS = f; renderView(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
       const view = e.target.closest("[data-view]")?.dataset.view;
-      const open = e.target.closest("[data-open]")?.dataset.open;
-      if (kind) { VIEW = "assets"; shell(); renderView(); setTimeout(() => { const s = document.querySelector('select[name="kind"]'); if (s) { s.value = kind; s.dispatchEvent(new Event("change")); } document.querySelector('input[name="name"]')?.focus(); }, 30); }
-      else if (view) { VIEW = view; shell(); renderView(); }
+      if (view) { VIEW = view; shell(); renderView(); }
       else if (e.target.id === "actAll") openAlerts();
-      else if (open) openReport(open);
     };
   }
 
-  // ---------- live scan + secure sequence (the hero show) ----------
+  // ---------- the live scan and protect sequences ----------
   const heroEl = (id) => document.getElementById(id);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  function setHero(state, title) {
-    const h = heroEl("hero"), l = heroEl("herolock");
-    if (h) h.className = "hero " + state;
+  function setLock(state, asset) {
+    const l = heroEl("herolock"), h = heroEl("hero");
     if (l) l.className = "herolock " + state;
-    if (title) { const t = heroEl("heroTitle"); if (t) t.textContent = title; }
+    if (h) h.className = "hero " + state;
+    const s = heroEl("statusword"); if (s) s.textContent = LOCK_WORD[state] || "";
+    const live = h?.querySelector(".live"); if (live) live.lastChild.textContent = state === "secure" || state === "watching" ? "Live protection" : "Lucent Shield";
+    if (asset) {
+      const step = !asset.lastScanAt ? 1 : asset.monitor ? 3 : 2;
+      h?.querySelectorAll(".stepper li").forEach((li, i) => { li.className = i + 1 < step ? "done" : i + 1 === step ? "on" : ""; });
+    }
   }
-  function setStatus(w) { const s = heroEl("statusword"); if (s) s.textContent = w; }
-  function setFocusIcon(asset) { const f = heroEl("herolock")?.querySelector(".flow"); if (f) f.outerHTML = flowIcon(asset); }
-  function enterSeq() {
-    ["heroLead", "heroScanbar"].forEach((id) => { const e = heroEl(id); if (e) e.hidden = true; });
+  function setTitle(t) { const e = heroEl("heroTitle"); if (e) e.textContent = t; }
+  function startLog() {
     const s = heroEl("heroSeq"); if (s) s.hidden = false;
     const ls = heroEl("logstream"); if (ls) ls.innerHTML = "";
-    heroEl("heroMeterWrap").hidden = true; heroEl("meterLabel").hidden = true; hideSecBtn();
+    const n = heroEl("nextStep"); if (n) n.innerHTML = "";
   }
-  function showMeter() { heroEl("heroMeterWrap").hidden = false; heroEl("meterLabel").hidden = false; }
-  function setMeter(pct) { const f = heroEl("meterFill"); if (f) f.style.width = pct + "%"; const p = heroEl("meterPct"); if (p) p.textContent = Math.round(pct) + "%"; }
   function logLine(cls, html) {
     const ls = heroEl("logstream"); if (!ls) return;
     const mark = cls === "ok" ? "✓" : cls === "bad" ? "✕" : cls === "warn" ? "!" : cls === "run" ? "›" : "·";
     const d = document.createElement("div"); d.className = "logline";
     d.innerHTML = `<span class="${cls || "run"}">${mark}</span> ${html}`;
-    ls.appendChild(d); while (ls.children.length > 6) ls.removeChild(ls.firstChild);
+    ls.appendChild(d); while (ls.children.length > 7) ls.removeChild(ls.firstChild);
   }
-  // Severity -> log colour. Critical/high read as alarms, medium as a warning.
   const sevClass = (s) => (s === "critical" || s === "high" ? "bad" : s === "medium" ? "warn" : "");
-  // Turn a real finding into a short "closing this down" action line for the Secure log.
-  // The fix to apply for a finding, in plain words. Lucent Shield prepares
-  // these; it does not change the customer's server (the Shield proxy will).
-  function fixPhrase(f) {
-    const t = (f.title || "").toLowerCase(), r = (f.rule || "").toLowerCase();
-    if (t.includes("hsts") || t.includes("strict-transport")) return "Turn on HSTS";
-    if (t.includes("content-security-policy")) return "Add a Content-Security-Policy";
-    if (t.includes("x-content-type")) return "Set X-Content-Type-Options: nosniff";
-    if (t.includes("clickjacking") || t.includes("x-frame")) return "Block clickjacking with X-Frame-Options";
-    if (t.includes("referrer-policy")) return "Set a Referrer-Policy";
-    if (t.includes("plain http")) return "Serve the site over HTTPS only";
-    if (t.includes("cookie")) return "Add Secure and HttpOnly to cookies";
-    if (t.includes("x-powered-by") || t.includes("server version") || t.includes("technology disclosed")) return "Hide the server and stack version";
-    if (t.includes(".env") || t.includes(".git") || t.includes("backup") || t.includes("config") || t.includes(".ds_store") || t.includes("exposed") || r.includes("exposed")) {
-      return `Block public access to ${f.title.replace(/ exposed.*/i, "").replace(/^Environment file/, ".env")}`;
+
+  function quickErr(msg) { const e = heroEl("quickErr"); if (e) e.textContent = msg || ""; }
+
+  /** Step 1: the scan type and target typed into the hero. */
+  async function startScan(kind, raw) {
+    quickErr("");
+    let target = raw.trim();
+    if (!target) return quickErr(kind === "repo" ? "Paste the address of your repository." : kind === "web" ? "Type the address of your website." : "Type the path of the file.");
+    if (kind === "web") {
+      if (!/^https?:\/\//i.test(target)) target = "https://" + target;
+      try { const u = new URL(target); if (!u.hostname.includes(".")) throw 0; target = `${u.protocol}//${u.host}`; } catch { return quickErr("That does not look like a website address, for example https://yoursite.com."); }
     }
-    return `Fix: ${f.title}`;
+    if (kind === "repo" && !ADMIN && !/^https:\/\/[\w.-]+\/[\w.-]+\/[\w.-]+/i.test(target)) return quickErr("Use the repository's web address, for example https://github.com/you/your-repo.");
+    const existing = ASSETS.find((a) => a.kind === kind && a.target.replace(/\/$/, "").toLowerCase() === target.replace(/\/$/, "").toLowerCase());
+    if (existing) { FOCUS = existing.id; renderView(); return runScan(existing); }
+    const auth = await authorizeScan(kind, target);
+    if (!auth) return;
+    const name = kind === "repo" ? target.replace(/\.git$/, "").split("/").filter(Boolean).slice(-1)[0] : kind === "web" ? hostOf(target) : target.split(/[\\/]/).pop();
+    let asset;
+    try { asset = (await api("/api/assets", { method: "POST", body: { name, kind, target, authorized: true } })).asset; }
+    catch (ex) { return quickErr(ex.message); }
+    await refresh();
+    FOCUS = asset.id;
+    const fresh = ASSETS.find((a) => a.id === asset.id) || asset;
+    renderView();
+    if (kind === "web" && !fresh.verified) { openVerify(fresh, (v) => runScan(v, auth)); return; }
+    runScan(fresh, auth);
   }
-  function showSecBtn(label, fn) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn"; b.textContent = label; b.onclick = fn; }
-  function secBtnDone(label) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn done"; b.textContent = label; b.onclick = null; }
-  function hideSecBtn() { const b = heroEl("secBtn"); if (b) b.hidden = true; }
-  function finishSeqSoon(ms = 3200) { setTimeout(async () => { SEQ = false; await refresh(); if (VIEW === "dashboard") renderView(); }, ms); }
+
+  const LOG_STEPS = {
+    web: (h) => [["run", `Resolving <b>${esc(h)}</b>`], ["run", "Opening a secure connection"], ["", "Checking HTTPS, the certificate and HSTS"], ["", "Reading the security headers"], ["", "Inspecting cookies"], ["", "Looking for files that should never be public"], ["", "Checking email spoofing protection"]],
+    repo: (h) => [["run", `Downloading <b>${esc(h)}</b>`], ["", "Searching for leaked keys and passwords"], ["", "Checking risky code patterns"], ["", "Following request input through the code"], ["", "Checking packages for known vulnerabilities"], ["", "Reviewing Docker, CI and cloud settings"]],
+    artifact: (h) => [["run", `Fingerprinting <b>${esc(h)}</b>`], ["", "Looking for secrets inside"], ["", "Checking for signs of tampering"]],
+  };
+
+  /** Runs a scan with the live log, then shows what to do next. */
+  async function runScan(asset, auth) {
+    if (SEQ) return;
+    if (asset.kind === "web" && !asset.verified) return openVerify(asset, (v) => runScan(v, auth));
+    if (!auth) { auth = await authorizeScan(asset.kind, asset.target); if (!auth) return; }
+    if (VIEW !== "dashboard") { VIEW = "dashboard"; shell(); }
+    FOCUS = asset.id;
+    renderView();
+    SEQ = true;
+    startLog(); setLock("scanning"); setTitle(`Scanning ${asset.name}…`);
+    const scanP = scanApi(asset.id, auth, asset.kind).then((r) => r, (ex) => ({ error: ex.message }));
+    for (const [c, t] of LOG_STEPS[asset.kind](asset.name)) { logLine(c, t); await wait(480); }
+    logLine("run", "Scoring what was found…");
+    const res = await scanP;
+    await wait(350);
+    const a = res?.asset;
+    if (!a) { logLine("bad", esc(res?.error || "The scan could not finish. Check the address and try again.")); setLock(lockState(asset)); SEQ = false; return; }
+    TOTAL_SCANS++;
+    const findings = (a.findings || []).filter((f) => f.severity !== "info").sort((x, y) => SEVERITY_ORDER.indexOf(x.severity) - SEVERITY_ORDER.indexOf(y.severity));
+    if (findings.length) {
+      logLine("run", `${findings.length} issue${findings.length === 1 ? "" : "s"} found:`);
+      for (const f of findings.slice(0, 7)) { await wait(380); logLine(sevClass(f.severity), `<b>${f.severity.toUpperCase()}</b> ${esc(f.title)}`); }
+      if (findings.length > 7) { await wait(300); logLine("", `…and ${findings.length - 7} more in the report`); }
+    } else {
+      const note = (a.findings || []).find((f) => /^(scan|repo)\./.test(f.rule));
+      logLine(note ? "warn" : "ok", note ? esc(note.title) : "No issues found");
+    }
+    await wait(500);
+    ASSETS = ASSETS.map((x) => (x.id === a.id ? { ...x, ...a } : x));
+    const st = lockState({ ...asset, ...a });
+    setLock(st, { ...asset, ...a });
+    setTitle(st === "exposed" ? `${a.name} is exposed` : st === "secure" ? `${a.name} is protected` : st === "unreached" ? `${a.name} could not be checked` : a.name);
+    if (st !== "unreached") logLine(openBad(a) ? "bad" : openAny(a) ? "warn" : "ok", openBad(a) ? `${openBad(a)} critical or high. Fix these first.` : openAny(a) ? "No critical or high issues." : "Clean.");
+    const n = heroEl("nextStep"); if (n) n.innerHTML = nextStep({ ...asset, ...a });
+    SEQ = false;
+    refreshQuiet();
+  }
+
+  /** Step 2: Protect. A standing permission to keep checking, then the padlock closes. */
+  async function protect(asset) {
+    const ok = await confirmBox({
+      title: "Protect " + asset.name,
+      body: `<p>Lucent Shield will check <b>${esc(asset.name)}</b> again every few hours, using the same read-only checks, and alert you the moment something changes.</p>
+        <label class="chk2"><input type="checkbox" id="cbAuth"><span>I own ${asset.kind === "web" ? "this website" : "this code"} or am authorised to test it, and I permit Lucent Shield to keep checking it until I pause protection.</span></label>`,
+      go: "Turn on protection", needCheck: true,
+    });
+    if (!ok) return;
+    SEQ = true;
+    startLog(); setLock("securing"); setTitle(`Protecting ${asset.name}…`);
+    let a;
+    try { a = (await api(`/api/assets/${asset.id}/monitor`, { method: "POST", body: { on: true, authorized: true } })).asset; }
+    catch (ex) { logLine("bad", esc(ex.message)); setLock(lockState(asset)); SEQ = false; return; }
+    const steps = asset.kind === "web"
+      ? ["Saving a baseline of the site's security settings", "Watching certificates, headers and public files", "Arming alerts for any change"]
+      : ["Saving a baseline of the code's findings", "Watching for new secrets and vulnerable packages", "Arming alerts for any change"];
+    for (const s of steps) { logLine("", s); await wait(520); logLine("ok", s.replace(/^(Saving|Watching|Arming)/, (m) => ({ Saving: "Saved", Watching: "Watching", Arming: "Armed" }[m]))); await wait(260); }
+    ASSETS = ASSETS.map((x) => (x.id === a.id ? { ...x, ...a } : x));
+    const st = lockState(a);
+    setLock(st, a);
+    setTitle(st === "secure" ? `${a.name} is protected` : `${a.name} is being watched`);
+    logLine(st === "secure" ? "ok" : "warn", st === "secure" ? "Locked. Protection is live." : `Protection is live. ${openBad(a)} critical or high ${openBad(a) === 1 ? "issue is" : "issues are"} still open: fix ${openBad(a) === 1 ? "it" : "them"} to turn the padlock green.`);
+    const n = heroEl("nextStep"); if (n) n.innerHTML = nextStep(a);
+    SEQ = false;
+    refreshQuiet();
+  }
+
+  /** A small confirm dialog. Resolves true or false. */
+  function confirmBox({ title, body, go, needCheck }) {
+    return new Promise((resolve) => {
+      const bg = document.createElement("div"); bg.className = "drawer-bg";
+      const m = document.createElement("div"); m.className = "authbox"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true");
+      m.innerHTML = `<div class="ah">${ic("shield", 20)} ${esc(title)}</div>${body}
+        <div class="arow"><button class="ghost" id="cbCancel">Cancel</button><button class="btn" id="cbGo" ${needCheck ? "disabled" : ""}>${esc(go)}</button></div>
+        <div class="fine">This permission is recorded with a timestamp.</div>`;
+      document.body.append(bg, m);
+      const done = (v) => { bg.remove(); m.remove(); resolve(v); };
+      bg.onclick = () => done(false);
+      m.querySelector("#cbCancel").onclick = () => done(false);
+      const b = m.querySelector("#cbGo"), c = m.querySelector("#cbAuth");
+      if (c) c.onchange = () => { b.disabled = !c.checked; };
+      b.onclick = () => { if (!b.disabled) done(true); };
+    });
+  }
 
   // Explicit, per-run authorization before ANY test (white box, black box or
   // forensics). Required every time, even after the terms were accepted.
@@ -277,23 +435,23 @@
   function authorizeScan(kind, target) {
     return new Promise((resolve) => {
       const forensic = kind === "artifact";
-      const label = kind === "repo" ? "white-box (full code) test" : kind === "web" ? "black-box (external) test" : "forensic examination";
-      const noun = kind === "repo" ? "repository or folder" : kind === "web" ? "website" : "file or artifact";
+      const label = kind === "repo" ? "white box (code) scan" : kind === "web" ? "black box (website) scan" : "forensic examination";
+      const noun = kind === "repo" ? "repository" : kind === "web" ? "website" : "file or artifact";
       const bg = document.createElement("div"); bg.className = "drawer-bg";
-      const m = document.createElement("div"); m.className = "authbox";
+      const m = document.createElement("div"); m.className = "authbox"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true");
       m.innerHTML = `
         <div class="ah ${forensic ? "danger" : ""}">${ic("shield", 20)} ${forensic ? "Legal authorization required" : "Authorization required"}</div>
-        <p>You are about to run a <b>${label}</b> against:</p>
+        <p>You are about to run a <b>${label}</b> of:</p>
         <div class="tgt">${esc(target)}</div>
         <p class="warn">${forensic
           ? "Forensic examination can reveal personal and sensitive data. You may only do it with lawful authority: ownership, written permission, or a warrant or court order. Doing it without authority is a serious offence, and the responsibility is entirely yours."
-          : `Only test systems you own or have explicit permission to test. Running a test against a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.`}</p>
+          : `Only scan systems you own or have explicit permission to test. Scanning a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.`}</p>
         ${forensic ? `
         <label class="al">Authorization reference</label>
         <input class="aref" id="authRef" maxlength="200" placeholder="Warrant / court order / written-permission reference">
         <label class="chk2"><input type="checkbox" id="authLegal"><span>I attest that I hold lawful authority (ownership, written permission, or a warrant or court order) to examine this, and I can produce it on request.</span></label>` : ""}
-        <label class="chk2"><input type="checkbox" id="authChk"><span>I confirm I own this ${noun} or have explicit authorisation to test it, and I give Lucent Shield explicit permission to scan it and identify vulnerabilities.</span></label>
-        <div class="arow"><button class="ghost" id="authCancel">Cancel</button><button class="btn" id="authGo" disabled>Authorise &amp; run</button></div>
+        <label class="chk2"><input type="checkbox" id="authChk"><span>I own this ${noun} or have explicit authorisation to test it, and I give Lucent Shield permission to scan it.</span></label>
+        <div class="arow"><button class="ghost" id="authCancel">Cancel</button><button class="btn" id="authGo" disabled>Authorise &amp; scan</button></div>
         <div class="fine">This authorisation${forensic ? " and reference are" : " is"} recorded with a timestamp.</div>`;
       document.body.append(bg, m);
       const done = (v) => { bg.remove(); m.remove(); resolve(v); };
@@ -312,130 +470,64 @@
     return api(`/api/assets/${id}/scan`, { method: "POST", body: { authorized: true, legal: kind === "artifact", reference: auth?.reference || "" } });
   }
 
-  // Domain-ownership verification: prove control of the site before scanning it.
+  // Domain-ownership verification. The owner picks ONE method, follows its
+  // steps, then presses Verify.
   function openVerify(asset, onVerified) {
-    const host = esc(asset.target.replace(/^https?:\/\//, "").replace(/\/.*$/, ""));
-    const tok = esc(asset.verifyToken);
-    const body = `
-      <h2>Verify you own ${host}</h2>
-      <div class="sub">Lucent Shield will not scan a website until you prove you control it. Choose one method, then press Verify.</div>
-      <div class="vmethod"><div class="vt">Option 1: host a file</div>
-        <p>Put a file at this exact address, containing the token below:</p>
-        <div class="tgt">https://${host}/.well-known/lucent-verify.txt</div></div>
-      <div class="vmethod"><div class="vt">Option 2: add a DNS record</div>
-        <p>Add this TXT record to <b>${host}</b>:</p>
-        <div class="tgt">lucent-verify=${tok}</div></div>
-      <div class="vmethod"><div class="vt">Your token</div><div class="tgt">${tok}</div></div>
+    const host = hostOf(asset.target);
+    const tok = asset.verifyToken;
+    const proto = /^http:\/\//i.test(asset.target) ? "http" : "https";
+    const fileUrl = `${proto}://${host}/.well-known/lucent-verify.txt`;
+    const copyBtn = (v, label = "Copy") => `<button type="button" class="copy" data-copy="${esc(v)}">${label}</button>`;
+    const d = drawer(`
+      <h2>Verify you own ${esc(host)}</h2>
+      <div class="sub">Lucent Shield scans a website only after you prove you control it. Pick one way, follow the steps, then press Verify.</div>
+      <div class="vpick" role="radiogroup" aria-label="How to verify">
+        <button type="button" role="radio" class="vopt on" data-m="file" aria-checked="true"><b>Upload a file</b><span>Best if you can change your site's files</span></button>
+        <button type="button" role="radio" class="vopt" data-m="dns" aria-checked="false"><b>Add a DNS record</b><span>Best if you manage your domain's DNS</span></button>
+      </div>
+      <div class="vpane" data-pane="file">
+        <ol class="vsteps">
+          <li><div>Download your verification file. It holds your token and nothing else.</div><a class="btn small" href="data:text/plain;charset=utf-8,${encodeURIComponent(tok)}" download="lucent-verify.txt">Download lucent-verify.txt</a></li>
+          <li><div>Put it on your site inside a folder called <code>.well-known</code>, so it opens at this address:</div><div class="tgt">${esc(fileUrl)} ${copyBtn(fileUrl)}</div>
+            <div class="hint2">On Vercel, Next.js or Netlify: put it in <code>public/.well-known/lucent-verify.txt</code>, then push and wait for the deploy. On cPanel or plain hosting: upload it into <code>public_html/.well-known/</code>.</div></li>
+          <li><div>Open the address. When it shows your token instead of an error page, press Verify.</div><a class="ghost small" href="${esc(fileUrl)}" target="_blank" rel="noopener noreferrer">Open the address</a></li>
+        </ol>
+      </div>
+      <div class="vpane" data-pane="dns" hidden>
+        <ol class="vsteps">
+          <li><div>Open the DNS settings where your domain is managed (Vercel → Domains, Cloudflare → DNS, or your registrar).</div></li>
+          <li><div>Add a record with these values:</div>
+            <table class="dns"><tr><th>Type</th><td><code>TXT</code></td></tr><tr><th>Name</th><td><code>@</code> <span class="hint2">(or ${esc(host)})</span></td></tr><tr><th>Value</th><td><code>lucent-verify=${esc(tok)}</code> ${copyBtn(`lucent-verify=${tok}`)}</td></tr></table></li>
+          <li><div>Save it, wait a few minutes, then press Verify. DNS changes can take up to an hour.</div></li>
+        </ol>
+      </div>
       <div class="arow"><button class="btn" id="vGo">Verify ownership</button></div>
-      <div class="vstatus" id="vStatus"></div>`;
-    const d = drawer(body);
+      <div class="vstatus" id="vStatus" role="status"></div>`);
+    d.querySelectorAll(".vopt").forEach((b) => b.onclick = () => {
+      d.querySelectorAll(".vopt").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", String(x === b)); });
+      d.querySelectorAll(".vpane").forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.m; });
+    });
+    d.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); } catch { b.textContent = "Select and copy"; }
+    });
     const st = d.querySelector("#vStatus"), go = d.querySelector("#vGo");
     go.onclick = async () => {
-      st.textContent = "Checking…"; st.className = "vstatus";
+      st.textContent = "Checking…"; st.className = "vstatus"; go.disabled = true;
       try {
         const r = await api(`/api/assets/${asset.id}/verify`, { method: "POST" });
         if (r.verified) {
-          st.textContent = "Verified. Ownership confirmed."; st.className = "vstatus ok";
+          st.textContent = "Verified. You own this site."; st.className = "vstatus ok";
           await refresh();
-          setTimeout(() => { d.close(); const fresh = ASSETS.find((a) => a.id === asset.id) || { ...asset, verified: true }; if (onVerified) onVerified(fresh); else renderView(); }, 800);
-        } else {
-          st.textContent = "Not found yet. DNS or the file can take a few minutes, so try again shortly."; st.className = "vstatus bad";
+          setTimeout(() => { d.close(); const fresh = ASSETS.find((a) => a.id === asset.id) || { ...asset, verified: true }; if (onVerified) onVerified(fresh); else renderView(); }, 900);
+          return;
         }
+        st.textContent = d.querySelector('.vopt[data-m="dns"]').classList.contains("on")
+          ? "The record was not found yet. DNS can take a while; try again in a few minutes."
+          : `The file was not found at ${fileUrl}, or it does not contain your token. Open that address to check it shows the token, then try again.`;
+        st.className = "vstatus bad";
       } catch (ex) { st.textContent = ex.message; st.className = "vstatus bad"; }
+      go.disabled = false;
     };
-  }
-
-  async function runScanSequence(target) {
-    if (!target) return;
-    if (!(await authorizeScan("web", target))) return;
-    let asset;
-    try {
-      const r = await api("/api/assets", { method: "POST", body: { name: target.replace(/^https?:\/\//, ""), kind: "web", target, authorized: true } });
-      asset = r.asset;
-    } catch (ex) { alert(ex.message); return; }
-    await refresh();
-    const fresh = ASSETS.find((a) => a.id === asset.id) || asset;
-    // A website must prove domain ownership before the first scan.
-    if (!fresh.verified) { if (VIEW === "dashboard") renderView(); openVerify(fresh, () => startScanSequence(fresh)); return; }
-    startScanSequence(fresh);
-  }
-
-  async function startScanSequence(asset) {
-    const host = asset.name;
-    SEQ = true;
-    if (!ASSETS.find((a) => a.id === asset.id)) ASSETS = [{ ...asset }, ...ASSETS];
-    renderView();
-    enterSeq(); setFocusIcon(asset); setHero("scanning", `Scanning ${esc(host)}…`); setStatus("SCANNING");
-    const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
-    const lines = [["run", `Resolving host <b>${esc(host)}</b>`], ["run", "Opening secure connection"], ["", "Reading response headers"], ["", "Checking TLS and HSTS"], ["", "Inspecting cookies"], ["", "Probing for exposed files"], ["", "Evaluating content security policy"]];
-    for (const [c, t] of lines) { logLine(c, t); await wait(440); }
-    logLine("run", "Scoring exposure…");
-    const res = await scanP; await wait(380);
-    const a = res?.asset;
-    if (!a) { logLine("bad", "Scan could not complete. Check the address and try again."); setStatus("ERROR"); finishSeqSoon(); return; }
-    ASSETS = ASSETS.map((x) => (x.id === asset.id ? { ...x, ...a } : x)); TOTAL_SCANS++;
-    const findings = (a.findings || []).slice().sort((x, y) => SEVERITY_ORDER.indexOf(x.severity) - SEVERITY_ORDER.indexOf(y.severity));
-    const bad = a.counts.critical + a.counts.high;
-    // Show what was actually found, one line at a time, like real logs.
-    if (findings.length) {
-      logLine("run", "Issues detected:");
-      await wait(300);
-      const shown = findings.slice(0, 8);
-      for (const f of shown) {
-        logLine(sevClass(f.severity), `<b>${f.severity.toUpperCase()}</b> ${esc(f.title)}`);
-        await wait(360);
-      }
-      if (findings.length > shown.length) { logLine("", `…and ${findings.length - shown.length} more`); await wait(300); }
-    }
-    if (bad > 0) {
-      setHero("exposed", "Attention needed"); setStatus("EXPOSED");
-      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open: ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to get the fixes.`);
-      showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host, findings));
-    } else if (findings.length) {
-      setHero("secure", "Protected"); setStatus("SECURED");
-      logLine("ok", "No critical or high issues. Minor notes only.");
-      logLine("ok", `${esc(host)} is locked and protected`);
-      finishSeqSoon();
-    } else {
-      setHero("secure", "Protected"); setStatus("SECURED");
-      logLine("ok", "No issues found");
-      logLine("ok", `${esc(host)} is locked and protected`);
-      finishSeqSoon();
-    }
-  }
-
-  async function secureFlow(assetId, host, findings) {
-    SEQ = true; hideSecBtn();
-    setHero("securing", "Preparing your fixes…"); setStatus("SECURING");
-    showMeter(); setMeter(6);
-    api(`/api/assets/${assetId}/monitor`, { method: "POST", body: { on: true } }).catch(() => {});
-    logLine("ok", "Continuous monitoring turned on");
-    await wait(480); setMeter(14);
-    const fixes = (findings || []).filter((f) => f.severity !== "info").slice(0, 12);
-    if (fixes.length) {
-      const span = 78 / fixes.length;
-      for (let i = 0; i < fixes.length; i++) {
-        const fix = fixPhrase(fixes[i]);
-        logLine("", `${fix}…`); await wait(430);
-        logLine("ok", `${fix}: fix ready`); setMeter(14 + span * (i + 1)); await wait(260);
-      }
-    } else {
-      for (const [pct, t] of [[45, "Checking the security baseline"], [90, "Arming alerts for any change"]]) { logLine("", t); setMeter(pct); await wait(520); }
-    }
-    logLine("run", "Re-scanning to see what is fixed…");
-    const res = await api(`/api/assets/${assetId}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
-    const a = res?.asset; if (a) { ASSETS = ASSETS.map((x) => (x.id === assetId ? { ...x, ...a } : x)); TOTAL_SCANS++; }
-    await wait(420);
-    const bad = a ? a.counts.critical + a.counts.high : 1;
-    if (bad === 0) {
-      setMeter(100); setHero("secure", "Protected"); setStatus("SECURED");
-      logLine("ok", "Clean. Lucent Shield keeps watching it.");
-      secBtnDone("Protected"); finishSeqSoon(3400);
-    } else {
-      setMeter(100); setHero("exposed", "Your fixes are ready"); setStatus("EXPOSED");
-      logLine("bad", `${bad} critical/high issue${bad !== 1 ? "s" : ""} still open. Apply the fixes in your report, then scan again.`);
-      showSecBtn("Open the fixes", () => openReport(assetId));
-    }
   }
 
   // ---------- assets view ----------
@@ -446,7 +538,7 @@
           <option value="repo">Code repo (white box)</option><option value="web">Website (black box)</option>${ADMIN ? `<option value="artifact">Artifact (forensics)</option>` : ""}
         </select></div>
         <div class="field"><label>Target</label><input name="target" placeholder="${ADMIN ? "https://github.com/you/repo  ·  /path/on/server  ·  https://yoursite.com" : "https://github.com/you/repo  ·  https://yoursite.com"}" required maxlength="2000"></div>
-        <button class="btn" type="submit">Add & protect</button>
+        <button class="btn" type="submit">Add & scan</button>
         <div class="err" id="addErr"></div>
       </form>
       <div class="grid" id="grid">${ASSETS.length ? ASSETS.map(cardHtml).join("") : `<div class="empty">No assets yet. Add one above.</div>`}</div>`;
@@ -458,7 +550,7 @@
     const unverified = a.kind === "web" && !a.verified;
     return `<div class="card s-${a.shield}" data-id="${a.id}">
       <span class="kind">${KIND_LABEL[a.kind] || a.kind}</span>
-      <button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Monitoring on. Click to pause" : "Paused. Click to watch"}">${a.monitor ? "● watching" : "○ paused"}</button>
+      ${a.kind !== "artifact" && a.lastScanAt ? `<button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Protected. Click to pause" : "Not protected. Click to protect"}">${a.monitor ? "● protected" : "○ not protected"}</button>` : ""}
       <button class="del" data-act="del" title="Remove">✕</button>
       ${lockSvg("padlock")}
       <div class="name">${esc(a.name)}</div>
@@ -515,10 +607,18 @@
 
   async function toggleMonitor(id) {
     const a = ASSETS.find((x) => x.id === id); if (!a) return;
-    try { const { asset } = await api(`/api/assets/${id}/monitor`, { method: "POST", body: { on: !a.monitor } }); ASSETS = ASSETS.map((x) => (x.id === id ? { ...x, ...asset } : x)); setCard(id); } catch {}
+    if (!a.monitor) { VIEW = "dashboard"; FOCUS = id; shell(); renderView(); protect(a); return; }
+    const ok = await confirmBox({ title: "Pause protection", body: `<p>Lucent Shield will stop checking <b>${esc(a.name)}</b> until you protect it again.</p>`, go: "Pause protection" });
+    if (!ok) return;
+    try { const { asset } = await api(`/api/assets/${id}/monitor`, { method: "POST", body: { on: false } }); ASSETS = ASSETS.map((x) => (x.id === id ? { ...x, ...asset } : x)); setCard(id); refreshQuiet(); } catch {}
   }
 
-  async function removeAsset(id) { if (!confirm("Remove this asset?")) return; await api(`/api/assets/${id}`, { method: "DELETE" }); await refresh(); renderView(); }
+  async function removeAsset(id) {
+    const a = ASSETS.find((x) => x.id === id);
+    const ok = await confirmBox({ title: "Remove " + (a?.name || "asset"), body: "<p>Its scan results and protection will be removed. The authorization records are kept.</p>", go: "Remove" });
+    if (!ok) return;
+    await api(`/api/assets/${id}`, { method: "DELETE" }); if (FOCUS === id) FOCUS = null; await refresh(); renderView();
+  }
 
   async function openReport(id) {
     const { asset } = await api(`/api/assets/${id}`);
@@ -722,15 +822,27 @@
   }
 
   // ---------- data ----------
-  async function refresh() { const d = await api("/api/assets"); ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); try { ALERTS = (await api("/api/alerts")).alerts; } catch {} }
+  async function refresh() {
+    const d = await api("/api/assets"); ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0);
+    try { ALERTS = (await api("/api/alerts")).alerts; } catch {}
+    try { EVENTS = (await api("/api/activity")).events; } catch {}
+  }
+  /** Refreshes data and the panels around the hero without restarting its animation. */
+  async function refreshQuiet() {
+    try { await refresh(); } catch { return; }
+    if (VIEW !== "dashboard") return;
+    // Swap only the numbers and the lists, so the hero keeps its log on screen.
+    const tmp = document.createElement("div"); tmp.innerHTML = dashboardView();
+    for (const sel of [".stats", ".cols"]) { const now = document.querySelector(`#view ${sel}`), next = tmp.querySelector(sel); if (now && next) now.replaceWith(next); }
+  }
   async function refreshCounts() { try { const d = await api("/api/assets"); TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); } catch {} }
 
   async function poll() {
     if (SEQ || document.querySelector(".drawer")) return;
     let d; try { d = await api("/api/assets"); } catch { return; }
-    const changed = JSON.stringify(d.assets.map((a) => [a.id, a.shield, a.counts])) !== JSON.stringify(ASSETS.map((a) => [a.id, a.shield, a.counts]));
+    const changed = JSON.stringify(d.assets.map((a) => [a.id, a.shield, a.counts, a.monitor, a.verified, a.lastScanAt])) !== JSON.stringify(ASSETS.map((a) => [a.id, a.shield, a.counts, a.monitor, a.verified, a.lastScanAt]));
     ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0);
-    if (changed) { try { ALERTS = (await api("/api/alerts")).alerts; } catch {} renderView(); }
+    if (changed) { try { ALERTS = (await api("/api/alerts")).alerts; EVENTS = (await api("/api/activity")).events; } catch {} renderView(); }
   }
 
   // ---------- login ----------

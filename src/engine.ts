@@ -16,13 +16,18 @@ import { countBySeverity, type Finding, type ScanResult } from "./types.ts";
 
 const pexec = promisify(execFile);
 
-export const VERSION = "0.12.0";
+export const VERSION = "0.13.0";
 
 export type AssetKind = "repo" | "web" | "artifact";
 export type Shield = "secure" | "at_risk" | "exposed" | "scanning" | "new";
 
 /** Green when clean, amber on medium/low, red (exposed) on critical/high. */
+/** Results that mean the target was never actually examined. */
+const UNREACHED = new Set(["web.unreachable", "web.bad-url", "web.blocked-internal", "repo.clone-failed", "repo.not-found", "scan.failed"]);
+
 export function shieldFor(findings: Finding[]): Shield {
+  // A site that did not answer has not been checked, so it is not "clean".
+  if (findings.some((f) => UNREACHED.has(f.rule))) return "new";
   const c = countBySeverity(findings);
   if (c.critical > 0 || c.high > 0) return "exposed";
   if (c.medium > 0 || c.low > 0) return "at_risk";

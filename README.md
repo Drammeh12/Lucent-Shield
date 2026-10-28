@@ -83,6 +83,7 @@ Settings you pass through the environment:
 - `LUCENT_GITHUB_TOKEN`: a token so white box scans can reach your private GitHub repositories.
 - `LUCENT_ALERT_WEBHOOK`: a Slack or Discord webhook to also receive monitoring alerts.
 - `LUCENT_DATA_DIR`: where to keep your assets and history (defaults to `/data` in Docker).
+- `LUCENT_ADMIN_EMAIL` and `LUCENT_ADMIN_PASSWORD`: turn on the admin sign-in. On the login screen choose "Sign in as admin" and use this email and password. The admin view shows the authorization audit trail (with a download), every sign-in attempt, all assets, and the server's health and safety settings. Use a different password from `LUCENT_PASSWORD`.
 
 ## How well it works
 

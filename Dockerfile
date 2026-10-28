@@ -23,4 +23,5 @@ EXPOSE 4600
 # Set LUCENT_PASSWORD in the environment to require a login.
 # Optional: LUCENT_GITHUB_TOKEN to scan private GitHub repos (white box).
 # Optional: LUCENT_ALERT_WEBHOOK to mirror alerts to Slack/Discord.
+# Optional: LUCENT_ADMIN_EMAIL + LUCENT_ADMIN_PASSWORD to turn on the admin sign-in.
 CMD ["npm", "start"]

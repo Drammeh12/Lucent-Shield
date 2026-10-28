@@ -47,6 +47,7 @@ const FILE = join(DATA_DIR, "assets.json");
 const ALERTS_FILE = join(DATA_DIR, "alerts.json");
 const META_FILE = join(DATA_DIR, "meta.json");
 const AUTH_FILE = join(DATA_DIR, "authorizations.json");
+const LOGINS_FILE = join(DATA_DIR, "logins.json");
 
 /** Writes JSON atomically: a crash mid-write can never leave a half-written file. */
 function writeJson(path: string, data: unknown, pretty = true): void {
@@ -210,5 +211,20 @@ export const store = {
     const list = readJson<any[]>(AUTH_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(AUTH_FILE, list.slice(0, 1000));
+  },
+
+  /** The authorization audit trail, newest first. */
+  listAuthorizations(limit = 1000): any[] {
+    return readJson<any[]>(AUTH_FILE, []).slice(0, limit);
+  },
+
+  /** Sign-in history for the admin view. Never stores passwords. */
+  logLogin(entry: { ip: string; role: "admin" | "user"; ok: boolean }): void {
+    const list = readJson<any[]>(LOGINS_FILE, []);
+    list.unshift({ ...entry, at: new Date().toISOString() });
+    writeJson(LOGINS_FILE, list.slice(0, 500));
+  },
+  listLogins(limit = 500): any[] {
+    return readJson<any[]>(LOGINS_FILE, []).slice(0, limit);
   },
 };

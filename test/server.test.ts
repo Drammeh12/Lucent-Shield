@@ -10,6 +10,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 
 const PASSWORD = "Correct-Horse-Battery-9";
+const ADMIN_EMAIL = "owner@example.com";
+const ADMIN_PASSWORD = "Admin-Staple-Lantern-4";
 const ROOT = join(import.meta.dirname, "..");
 let proc: ChildProcess;
 let base = "";
@@ -39,7 +41,7 @@ before(async () => {
   const port = 20000 + Math.floor(Math.random() * 30000);
   base = `http://127.0.0.1:${port}`;
   proc = spawn(process.execPath, [...process.execArgv, join(ROOT, "src/server/server.ts")], {
-    env: { ...process.env, PORT: String(port), LUCENT_PASSWORD: PASSWORD, LUCENT_DATA_DIR: dataDir, LUCENT_TICK_MS: "3600000", LUCENT_ALLOW_INTERNAL: "1" },
+    env: { ...process.env, PORT: String(port), LUCENT_PASSWORD: PASSWORD, LUCENT_ADMIN_EMAIL: ADMIN_EMAIL, LUCENT_ADMIN_PASSWORD: ADMIN_PASSWORD, LUCENT_DATA_DIR: dataDir, LUCENT_TICK_MS: "3600000", LUCENT_ALLOW_INTERNAL: "1" },
     stdio: "ignore",
   });
   for (let i = 0; i < 100; i++) {
@@ -139,6 +141,29 @@ test("a damaged data file is kept aside, never silently wiped", async () => {
   writeFileSync(join(dataDir, "alerts.json"), "{ broken");
   assert.equal((await call("/api/alerts")).status, 200);
   assert.ok(readdirSync(dataDir).some((f) => f.startsWith("alerts.json.corrupt-")));
+});
+
+test("the admin view is for the admin only", async () => {
+  // A normal dashboard session is refused.
+  assert.equal((await call("/api/admin/overview")).status, 403);
+  assert.equal((await call("/api/admin/audit.json")).status, 403);
+  assert.equal((await call("/api/auth")).data.admin, false);
+  // The dashboard password does not open the admin account, nor a wrong admin password.
+  assert.equal((await call("/api/login", { method: "POST", body: { email: ADMIN_EMAIL, password: PASSWORD }, auth: false })).status, 401);
+  // The admin email (any letter case) with the admin password does.
+  const res = await fetch(base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "Owner@Example.com", password: ADMIN_PASSWORD }) });
+  assert.equal(res.status, 200);
+  const admin = (res.headers.get("set-cookie") ?? "").split(";")[0];
+  assert.equal((await call("/api/auth", { headers: { cookie: admin } })).data.admin, true);
+  const o = await call("/api/admin/overview", { headers: { cookie: admin } });
+  assert.equal(o.status, 200);
+  assert.ok(o.data.authorizations.length > 0, "audit trail is shown");
+  assert.ok(o.data.logins.some((l: any) => l.role === "admin" && !l.ok), "the refused admin sign-in is recorded");
+  assert.ok(o.data.assets.every((a: any) => !("verifyToken" in a) && !("findings" in a)));
+  assert.equal(JSON.stringify(o.data).includes(ADMIN_PASSWORD), false, "no secret is ever returned");
+  assert.equal(JSON.stringify(o.data).includes(PASSWORD), false);
+  const dl = await fetch(base + "/api/admin/audit.json", { headers: { cookie: admin } });
+  assert.match(dl.headers.get("content-disposition") ?? "", /attachment/);
 });
 
 test("logging out ends the session for real (the old cookie stops working)", async () => {

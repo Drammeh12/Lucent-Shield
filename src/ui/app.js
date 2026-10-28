@@ -41,6 +41,7 @@
     finger: `<path d="M7 11a4 4 0 0 1 8 0v3M9 11v4M13 11v5M5 12v2M17 12v2"/>`,
     db: `<ellipse cx="11" cy="5" rx="7" ry="2.6"/><path d="M4 5v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V5"/><path d="M4 11c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/>`,
     server: `<rect x="3" y="4" width="16" height="6" rx="1.5"/><rect x="3" y="12" width="16" height="6" rx="1.5"/><path d="M6.5 7h.01M6.5 15h.01"/>`,
+    key: `<circle cx="7.5" cy="14.5" r="4"/><path d="M10.5 11.5 19 3M15 7l3 3M17 5l2 2"/>`,
   };
   const ic = (n, w = 18) => `<svg width="${w}" height="${w}" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[n] || ""}</svg>`;
 
@@ -53,7 +54,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false;
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -71,6 +72,7 @@
   // ---------- shell ----------
   function shell() {
     const nav = [["dashboard", "home", "Dashboard"], ["assets", "assets", "Assets"], ["scans", "scans", "Scans"], ["reports", "reports", "Reports"], ["settings", "gear", "Settings"]];
+    if (ADMIN) nav.push(["admin", "key", "Admin"]);
     root.innerHTML = `<div class="app">
       <aside class="side">
         <div class="logo"><img src="/logo.png" alt=""><div class="wm"><b>LUCENT</b><span>SHIELD</span></div></div>
@@ -82,7 +84,7 @@
           <div class="crumbs">Scan · Detect · <b>Secure</b></div>
           <div class="sp"></div>
           <button class="iconbtn" id="bell">${ic("bell")}<span class="badge" id="bellBadge" hidden>0</span></button>
-          <div class="user"><span class="av">BL</span><b>Bash Lucent</b></div>
+          <div class="user"><span class="av">BL</span><b>Bash Lucent</b>${ADMIN ? `<span class="tag secure">Admin</span>` : ""}</div>
         </div>
         <div class="content" id="view"></div>
         <div class="content"><div class="appfoot">
@@ -105,6 +107,7 @@
     else if (VIEW === "assets") { el.innerHTML = assetsView(); wireAssets(); }
     else if (VIEW === "reports" || VIEW === "scans") el.innerHTML = reportsView();
     else if (VIEW === "settings") { el.innerHTML = settingsView(); wireSettings(); }
+    else if (VIEW === "admin" && ADMIN) { el.innerHTML = `<div class="empty">Loading the admin view…</div>`; loadAdmin(); }
     if (VIEW === "dashboard") wireDashboard();
   }
 
@@ -560,6 +563,76 @@
   }
   function wireSettings() { const b = document.getElementById("logout"); if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); }; }
 
+  // ---------- admin ----------
+  function dur(sec) { const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
+  const yes = (on, good = true) => `<span class="tag ${on === good ? "secure" : "exposed"}">${on ? "On" : "Off"}</span>`;
+
+  async function loadAdmin() {
+    const el = document.getElementById("view");
+    let d;
+    try { d = await api("/api/admin/overview"); }
+    catch (ex) { if (VIEW === "admin") el.innerHTML = `<div class="empty">${esc(ex.message)}</div>`; return; }
+    if (VIEW !== "admin") return;
+    const t = d.totals, sys = d.system, st = sys.settings;
+    const stat = (cls, icon, label, n, sub, subcls = "") => `<div class="stat"><div class="si ${cls}">${ic(icon, 20)}</div><div><div class="l">${label}</div><div class="n">${n}</div><div class="sub ${subcls}">${sub}</div></div></div>`;
+    const open = t.severity.critical + t.severity.high;
+    const warnings = [];
+    if (!st.password) warnings.push("No dashboard password is set (LUCENT_PASSWORD). Anyone who can reach the server can open it.");
+    if (!st.httpsCookies) warnings.push("The login cookie is not marked Secure. Set TRUST_PROXY=1 when serving over HTTPS.");
+    if (st.internalTargetsAllowed) warnings.push("Internal network targets are allowed (LUCENT_ALLOW_INTERNAL=1). Turn this off in production.");
+    if (t.failedLogins24h >= 5) warnings.push(`${t.failedLogins24h} failed sign-ins in the last 24 hours. Someone may be guessing the password.`);
+
+    el.innerHTML = `
+      <div class="stats">
+        ${stat("blue", "assets", "Assets", t.assets, `${t.byKind.repo} code · ${t.byKind.web} sites · ${t.byKind.artifact} forensic`)}
+        ${stat("red", "alert", "Critical and high", open, open ? "Open across all assets" : "None open", open ? "bad" : "ok")}
+        ${stat("violet", "radar", "Scans run", t.scans, `${t.monitored} ${t.monitored === 1 ? "asset" : "assets"} monitored`)}
+        ${stat(t.failedLogins24h ? "red" : "green", "key", "Failed sign-ins", t.failedLogins24h, "in the last 24 hours", t.failedLogins24h ? "bad" : "ok")}
+      </div>
+      ${warnings.length ? `<div class="pnl adm-warn">${warnings.map((w) => `<div class="row"><span class="dotline" style="background:var(--amber)"></span><div class="rt"><div class="t">${esc(w)}</div></div></div>`).join("")}</div>` : ""}
+      <div class="adm-cols">
+        <div class="pnl">
+          <div class="ph"><h3>${ic("shield", 16)} Authorization audit</h3><a class="all" href="/api/admin/audit.json" download>Download</a></div>
+          <p class="adm-note">Every scan is recorded here with who confirmed it, from where, and when. Forensic scans carry their legal reference.</p>
+          ${d.authorizations.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Asset</th><th>Type</th><th>From</th><th>Reference</th></tr></thead><tbody>
+            ${d.authorizations.slice(0, 60).map((a) => `<tr><td>${new Date(a.at).toLocaleString()}</td><td title="${esc(a.target)}">${esc(a.name)}</td><td>${esc(KIND_LABEL[a.kind] || a.kind)}</td><td class="mono">${esc(a.ip)}</td><td>${esc(a.reference || "")}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">No scans authorized yet.</div>`}
+        </div>
+        <div class="pnl">
+          <div class="ph"><h3>${ic("key", 16)} Sign-ins</h3></div>
+          ${d.logins.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Account</th><th>From</th><th>Result</th></tr></thead><tbody>
+            ${d.logins.slice(0, 40).map((l) => `<tr><td>${new Date(l.at).toLocaleString()}</td><td>${l.role === "admin" ? "Admin" : "Dashboard"}</td><td class="mono">${esc(l.ip)}</td><td><span class="tag ${l.ok ? "secure" : "exposed"}">${l.ok ? "Signed in" : "Refused"}</span></td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">No sign-ins recorded yet.</div>`}
+        </div>
+      </div>
+      <div class="pnl adm-block">
+        <div class="ph"><h3>${ic("assets", 16)} All assets</h3></div>
+        ${d.assets.length ? `<div class="adm-table"><table><thead><tr><th>Asset</th><th>Type</th><th>State</th><th>Open issues</th><th>Ownership</th><th>Monitor</th><th>Last scan</th></tr></thead><tbody>
+          ${d.assets.map((a) => `<tr><td><b>${esc(a.name)}</b><div class="mono sub">${esc(a.target)}</div></td><td>${esc(KIND_LABEL[a.kind])}</td><td><span class="tag ${esc(a.shield)}">${esc(STATE_LABEL[a.shield])}</span></td>
+            <td>${SEVERITY_ORDER.slice(0, 4).filter((s) => a.counts?.[s]).map((s) => `<span class="sev ${s}">${a.counts[s]} ${s}</span>`).join(" ") || "None"}</td>
+            <td>${a.kind === "web" ? (a.verified ? `<span class="tag secure">Verified</span>` : `<span class="tag at_risk">Not verified</span>`) : "Not needed"}</td>
+            <td>${a.monitor ? "On" : "Off"}</td><td>${timeAgo(a.lastScanAt)}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty">No assets yet.</div>`}
+      </div>
+      <div class="adm-cols">
+        <div class="set">
+          <div class="kv"><span class="k">Version</span><b>${esc(sys.version)}</b></div>
+          <div class="kv"><span class="k">Running for</span><span>${dur(sys.uptimeSec)}</span></div>
+          <div class="kv"><span class="k">Memory in use</span><span>${sys.memoryMb} MB</span></div>
+          <div class="kv"><span class="k">Signed-in sessions</span><span>${sys.activeSessions}</span></div>
+          <div class="kv"><span class="k">Node.js</span><span>${esc(sys.node)}</span></div>
+        </div>
+        <div class="set">
+          <div class="kv"><span class="k">Dashboard password</span>${yes(st.password)}</div>
+          <div class="kv"><span class="k">Admin sign-in</span>${yes(st.admin)}</div>
+          <div class="kv"><span class="k">Secure cookies (HTTPS)</span>${yes(st.httpsCookies)}</div>
+          <div class="kv"><span class="k">Private GitHub access</span>${yes(st.githubToken)}</div>
+          <div class="kv"><span class="k">Slack or Discord alerts</span>${yes(st.alertWebhook)}</div>
+          <div class="kv"><span class="k">Internal targets allowed</span>${yes(st.internalTargetsAllowed, false)}</div>
+        </div>
+      </div>`;
+  }
+
   // ---------- data ----------
   async function refresh() { const d = await api("/api/assets"); ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); try { ALERTS = (await api("/api/alerts")).alerts; } catch {} }
   async function refreshCounts() { try { const d = await api("/api/assets"); TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); } catch {} }
@@ -573,19 +646,29 @@
   }
 
   // ---------- login ----------
-  function loginView() {
+  function loginView(adminLogin = false) {
     root.innerHTML = `<div class="login"><div class="box">
       <div class="shieldwrap"><div class="glow"></div><div class="ring"></div><img src="/logo.png" alt="Lucent Shield"></div>
       <div class="pill"><span class="d"></span>Protected access</div>
       <h1>Lucent Shield</h1><p>Enter your password to open your dashboard.</p>
-      <form id="loginForm"><input type="password" name="password" placeholder="Password" autofocus required>
-        <button class="btn" type="submit">Unlock</button><div class="err" id="loginErr"></div></form>
+      <form id="loginForm"><input type="email" name="email" placeholder="Admin email" autocomplete="username" hidden>
+        <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
+        <button class="btn" type="submit">Unlock</button><div class="err" id="loginErr"></div>
+        ${adminLogin ? `<button type="button" class="adm-switch" id="admSwitch">Sign in as admin</button>` : ""}</form>
       <div class="foot"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></div>
       <div class="cap">Created by Bash Lucent · © 2026</div>
     </div></div>`;
     document.getElementById("loginForm").onsubmit = async (e) => {
       e.preventDefault(); const err = document.getElementById("loginErr"); err.textContent = "";
-      try { await api("/api/login", { method: "POST", body: { password: e.target.password.value } }); start(); } catch (ex) { err.textContent = ex.message; }
+      const email = e.target.email.hidden ? "" : e.target.email.value.trim();
+      try { await api("/api/login", { method: "POST", body: email ? { email, password: e.target.password.value } : { password: e.target.password.value } }); boot(); } catch (ex) { err.textContent = ex.message; }
+    };
+    const sw = document.getElementById("admSwitch");
+    if (sw) sw.onclick = () => {
+      const f = document.getElementById("loginForm"), em = f.email, admin = em.hidden;
+      em.hidden = !admin; em.required = admin; sw.textContent = admin ? "Use the dashboard password" : "Sign in as admin";
+      document.querySelector(".login p").textContent = admin ? "Sign in with the admin email and password." : "Enter your password to open your dashboard.";
+      (admin ? em : f.password).focus();
     };
   }
 
@@ -597,7 +680,7 @@
   }
 
   async function boot() {
-    try { const a = await api("/api/auth"); if (a.required && !a.authed) loginView(); else start(); }
+    try { const a = await api("/api/auth"); ADMIN = !!a.admin; if (!ADMIN && VIEW === "admin") VIEW = "dashboard"; if (a.required && !a.authed) loginView(a.adminLogin); else start(); }
     catch { root.innerHTML = `<div class="boot">Could not reach the server.</div>`; }
   }
   boot();

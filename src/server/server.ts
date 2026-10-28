@@ -1,5 +1,7 @@
 // Lucent Shield web app — serves the dashboard and the API.
-// Single operator, protected by one password (set LUCENT_PASSWORD).
+// Protected by a password (LUCENT_PASSWORD). An admin signs in with the email
+// and password set in LUCENT_ADMIN_EMAIL and LUCENT_ADMIN_PASSWORD, and gets
+// the admin view (audit trail, sign-ins, every asset, server health).
 // Start:  npm run web      then open http://localhost:4600
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -19,9 +21,15 @@ const PORT = Number(process.env.PORT) || 4600;
 const PASSWORD = (process.env.LUCENT_PASSWORD ?? "").trim();
 const HTTPS = process.env.LUCENT_PUBLIC_URL?.startsWith("https://") || process.env.TRUST_PROXY === "1";
 
-// Sessions: token -> expiry (ms). Expired tokens are dropped on use.
+const ADMIN_EMAIL = (process.env.LUCENT_ADMIN_EMAIL ?? "").trim().toLowerCase();
+const ADMIN_PASSWORD = (process.env.LUCENT_ADMIN_PASSWORD ?? "").trim();
+const ADMIN_ON = !!(ADMIN_EMAIL && ADMIN_PASSWORD);
+const LOGIN_REQUIRED = !!PASSWORD || ADMIN_ON;
+const STARTED = Date.now();
+
+// Sessions: token -> expiry (ms) and role. Expired tokens are dropped on use.
 const SESSION_MS = 24 * 60 * 60 * 1000;
-const sessions = new Map<string, number>();
+const sessions = new Map<string, { expiry: number; admin: boolean }>();
 
 // Login throttle: per-client-IP failed-attempt tracking, to blunt brute force.
 const LOGIN_MAX_FAILS = 8;
@@ -70,14 +78,25 @@ function cookies(req: IncomingMessage): Record<string, string> {
   return out;
 }
 
-function authed(req: IncomingMessage): boolean {
-  if (!PASSWORD) return true; // open in local/dev mode
+function session(req: IncomingMessage): { expiry: number; admin: boolean } | null {
   const token = cookies(req)["ls"];
-  if (!token) return false;
-  const expiry = sessions.get(token);
-  if (!expiry) return false;
-  if (expiry < Date.now()) { sessions.delete(token); return false; } // expired
-  return true;
+  if (!token) return null;
+  const s = sessions.get(token);
+  if (!s) return null;
+  if (s.expiry < Date.now()) { sessions.delete(token); return null; } // expired
+  return s;
+}
+
+function authed(req: IncomingMessage): boolean {
+  if (!LOGIN_REQUIRED) return true; // open in local/dev mode
+  return !!session(req);
+}
+
+/** Admin when signed in with the admin email. With no login set up at all
+ *  (local development) the single local operator is the admin. */
+function isAdmin(req: IncomingMessage): boolean {
+  if (!LOGIN_REQUIRED) return true;
+  return !!session(req)?.admin;
 }
 
 function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -148,18 +167,62 @@ async function verifyDomain(target: string, token: string): Promise<{ ok: boolea
   return { ok: false };
 }
 
-function passwordOk(input: string): boolean {
-  if (!PASSWORD) return false;
+function same(input: string, secret: string): boolean {
+  if (!secret) return false;
   const a = createHash("sha256").update(input).digest();
-  const b = createHash("sha256").update(PASSWORD).digest();
+  const b = createHash("sha256").update(secret).digest();
   return timingSafeEqual(a, b);
+}
+const passwordOk = (input: string) => same(input, PASSWORD);
+
+/** Everything the admin view shows, built from the stored data. */
+function adminOverview() {
+  const assets = store.list();
+  const sev = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  const byKind: Record<string, number> = { repo: 0, web: 0, artifact: 0 };
+  const byShield: Record<string, number> = { secure: 0, at_risk: 0, exposed: 0, scanning: 0, new: 0 };
+  for (const a of assets) {
+    byKind[a.kind] = (byKind[a.kind] ?? 0) + 1;
+    byShield[a.shield] = (byShield[a.shield] ?? 0) + 1;
+    for (const k of Object.keys(sev) as (keyof typeof sev)[]) sev[k] += a.counts?.[k] ?? 0;
+  }
+  const logins = store.listLogins(100);
+  const dayAgo = Date.now() - 86_400_000;
+  const mem = process.memoryUsage();
+  return {
+    totals: {
+      assets: assets.length, byKind, byShield, severity: sev,
+      scans: store.scanCount(),
+      monitored: assets.filter((a) => a.monitor).length,
+      webUnverified: assets.filter((a) => a.kind === "web" && !a.verified).length,
+      failedLogins24h: logins.filter((l) => !l.ok && new Date(l.at).getTime() > dayAgo).length,
+    },
+    assets: assets.map(({ findings, verifyToken, ...a }) => a),
+    authorizations: store.listAuthorizations(200),
+    logins,
+    alerts: store.listAlerts().slice(0, 50),
+    system: {
+      version: VERSION, node: process.version,
+      uptimeSec: Math.round((Date.now() - STARTED) / 1000),
+      memoryMb: Math.round(mem.rss / 1e6),
+      activeSessions: [...sessions.values()].filter((s) => s.expiry > Date.now()).length,
+      settings: {
+        password: !!PASSWORD,
+        admin: ADMIN_ON,
+        httpsCookies: !!HTTPS,
+        githubToken: !!process.env.LUCENT_GITHUB_TOKEN,
+        alertWebhook: !!process.env.LUCENT_ALERT_WEBHOOK,
+        internalTargetsAllowed: process.env.LUCENT_ALLOW_INTERNAL === "1",
+      },
+    },
+  };
 }
 
 async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   const method = req.method ?? "GET";
 
   if (path === "/api/auth" && method === "GET") {
-    return json(res, 200, { required: !!PASSWORD, authed: authed(req), version: VERSION });
+    return json(res, 200, { required: LOGIN_REQUIRED, authed: authed(req), admin: authed(req) && isAdmin(req), adminLogin: ADMIN_ON, version: VERSION });
   }
 
   if (path === "/api/login" && method === "POST") {
@@ -167,13 +230,20 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const lockedFor = loginLockedFor(ip);
     if (lockedFor > 0) return json(res, 429, { error: `Too many attempts. Try again in ${Math.ceil(lockedFor / 60)} min.` });
     const body = await readBody(req);
-    if (!passwordOk(String(body.password ?? ""))) {
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const password = String(body.password ?? "");
+    // With an email, only the admin credentials are accepted; without one, the
+    // shared dashboard password. Both comparisons run in constant time.
+    const asAdmin = !!email;
+    const ok = asAdmin ? ADMIN_ON && same(email, ADMIN_EMAIL) && same(password, ADMIN_PASSWORD) : passwordOk(password);
+    store.logLogin({ ip, role: asAdmin ? "admin" : "user", ok });
+    if (!ok) {
       noteLoginFail(ip);
-      return json(res, 401, { error: "Wrong password." });
+      return json(res, 401, { error: asAdmin ? "Wrong email or password." : "Wrong password." });
     }
     clearLoginFails(ip);
     const token = randomBytes(24).toString("hex");
-    sessions.set(token, Date.now() + SESSION_MS);
+    sessions.set(token, { expiry: Date.now() + SESSION_MS, admin: asAdmin });
     return json(res, 200, { ok: true }, { "Set-Cookie": `ls=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${HTTPS ? "; Secure" : ""}` });
   }
 
@@ -222,6 +292,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     } catch {
       return json(res, 404, { error: "no icon" });
     }
+  }
+
+  // Admin only. Read-only views; nothing here changes stored data.
+  if (path.startsWith("/api/admin/")) {
+    if (!isAdmin(req)) return json(res, 403, { error: "Admins only." });
+    if (path === "/api/admin/overview" && method === "GET") return json(res, 200, adminOverview());
+    if (path === "/api/admin/audit.json" && method === "GET") {
+      return json(res, 200, store.listAuthorizations(), { "Content-Disposition": `attachment; filename="lucent-authorizations-${new Date().toISOString().slice(0, 10)}.json"` });
+    }
+    return json(res, 404, { error: "not found" });
   }
 
   if (path === "/api/alerts" && method === "GET") {
@@ -348,6 +428,8 @@ server.headersTimeout = 65_000;
 
 server.listen(PORT, () => {
   console.log(`Lucent Shield v${VERSION} running on http://localhost:${PORT}`);
-  if (!PASSWORD) console.log("  (no LUCENT_PASSWORD set, so it runs in open mode, for local use only)");
+  if (!LOGIN_REQUIRED) console.log("  (no LUCENT_PASSWORD set, so it runs in open mode, for local use only)");
+  if (ADMIN_ON) console.log("  admin sign-in is on");
+  else if (ADMIN_EMAIL || ADMIN_PASSWORD) console.log("  admin sign-in is off: set both LUCENT_ADMIN_EMAIL and LUCENT_ADMIN_PASSWORD");
   startMonitor();
 });

@@ -2,7 +2,7 @@
 // scan, saved as one JSON file in the data directory (a Bash Cloud disk, or
 // ./data locally). Single-user, so no database is needed.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { countBySeverity, type Finding, type ScanResult } from "../types.ts";
@@ -46,42 +46,64 @@ const ALERTS_FILE = join(DATA_DIR, "alerts.json");
 const META_FILE = join(DATA_DIR, "meta.json");
 const AUTH_FILE = join(DATA_DIR, "authorizations.json");
 
+/** Writes JSON atomically: a crash mid-write can never leave a half-written file. */
+function writeJson(path: string, data: unknown, pretty = true): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, pretty ? 2 : 0));
+  renameSync(tmp, path);
+}
+
+/** Reads JSON. A damaged file is set aside (never silently overwritten) and the fallback is used. */
+function readJson<T>(path: string, fallback: T): T {
+  if (!existsSync(path)) return fallback;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch (err) {
+    const saved = `${path}.corrupt-${Date.now()}`;
+    try { renameSync(path, saved); } catch { /* ignore */ }
+    console.error(`Lucent Shield: ${path} could not be read; it was kept as ${saved}.`, err instanceof Error ? err.message : err);
+    return fallback;
+  }
+}
+
 function loadMeta(): { scans: number } {
-  try { return JSON.parse(readFileSync(META_FILE, "utf8")); } catch { return { scans: 0 }; }
+  return readJson(META_FILE, { scans: 0 });
 }
 function persistMeta(meta: { scans: number }): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(META_FILE, JSON.stringify(meta));
+  writeJson(META_FILE, meta, false);
 }
 
 function load(): Asset[] {
-  try {
-    return JSON.parse(readFileSync(FILE, "utf8")) as Asset[];
-  } catch {
-    return [];
-  }
+  return readJson<Asset[]>(FILE, []);
 }
 
 function persist(assets: Asset[]): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(FILE, JSON.stringify(assets, null, 2));
+  writeJson(FILE, assets);
 }
 
 function loadAlerts(): Alert[] {
-  try {
-    return JSON.parse(readFileSync(ALERTS_FILE, "utf8")) as Alert[];
-  } catch {
-    return [];
-  }
+  return readJson<Alert[]>(ALERTS_FILE, []);
 }
 
 function persistAlerts(alerts: Alert[]): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  // Keep the most recent 200.
-  writeFileSync(ALERTS_FILE, JSON.stringify(alerts.slice(0, 200), null, 2));
+  writeJson(ALERTS_FILE, alerts.slice(0, 200)); // keep the most recent 200
 }
 
+// One scan per asset at a time (a button press and the monitor can't collide).
+const scanning = new Set<string>();
+
 export const store = {
+  /** Claims the asset for scanning; false if it is already being scanned. */
+  beginScan(id: string): boolean {
+    if (scanning.has(id)) return false;
+    scanning.add(id);
+    return true;
+  },
+  endScan(id: string): void {
+    scanning.delete(id);
+  },
+
   list(): Asset[] {
     return load().sort((a, b) => (b.lastScanAt ?? b.createdAt).localeCompare(a.lastScanAt ?? a.createdAt));
   },
@@ -182,10 +204,8 @@ export const store = {
 
   /** Audit record: the operator gave explicit authorization to test a target. */
   logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string; reference?: string }): void {
-    let list: any[] = [];
-    try { list = JSON.parse(readFileSync(AUTH_FILE, "utf8")); } catch { /* new file */ }
+    const list = readJson<any[]>(AUTH_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(AUTH_FILE, JSON.stringify(list.slice(0, 1000), null, 2));
+    writeJson(AUTH_FILE, list.slice(0, 1000));
   },
 };

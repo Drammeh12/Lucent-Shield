@@ -46,8 +46,14 @@ async function scanOne(asset: Asset): Promise<void> {
   const beforeShield = asset.shield;
   const beforeHighCrit = asset.counts.critical + asset.counts.high;
 
-  const result = await runScan(asset.kind, asset.target);
-  const updated = store.saveScan(asset.id, result);
+  if (!store.beginScan(asset.id)) return; // a manual scan is already running
+  let updated;
+  try {
+    const result = await runScan(asset.kind, asset.target);
+    updated = store.saveScan(asset.id, result);
+  } finally {
+    store.endScan(asset.id);
+  }
   if (!updated) return;
 
   const afterHighCrit = updated.counts.critical + updated.counts.high;

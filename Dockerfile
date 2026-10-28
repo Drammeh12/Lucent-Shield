@@ -11,6 +11,10 @@ RUN npm install --omit=dev --no-audit --no-fund
 
 COPY . .
 
+# Run as the unprivileged "node" user, never root. /data must be writable by it.
+RUN mkdir -p /data && chown -R node:node /data /app
+USER node
+
 # Data (your protected assets + last scans) persists on a mounted disk.
 ENV LUCENT_DATA_DIR=/data
 ENV PORT=4600

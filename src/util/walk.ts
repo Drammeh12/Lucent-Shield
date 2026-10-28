@@ -29,12 +29,27 @@ export interface ScanFile {
   text: string;
 }
 
+// Lockfiles are large but hold the exact versions we need, so they get more room.
+const BIG_OK = /^(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|cargo\.lock|gemfile\.lock|poetry\.lock|pipfile\.lock|packages\.lock\.json)$/i;
+
+/** Safety limits so a huge repository can never exhaust the server. */
+export const WALK_LIMITS = { maxFiles: 30_000, maxTotalBytes: 400_000_000, maxDepth: 40 };
+
+export interface WalkResult { files: ScanFile[]; truncated: boolean; skippedLarge: number }
+
 /** Returns the files under `root` that should be scanned as source text. */
 export function walk(root: string, maxBytes = 2_000_000): ScanFile[] {
+  return walkWithStats(root, maxBytes).files;
+}
+
+/** Like walk, but also reports whether limits cut the scan short. */
+export function walkWithStats(root: string, maxBytes = 2_000_000): WalkResult {
   const out: ScanFile[] = [];
   const rootPrefix = root.endsWith("/") ? root : root + "/";
+  let total = 0, truncated = false, skippedLarge = 0;
 
-  const recurse = (dir: string) => {
+  const recurse = (dir: string, depth: number) => {
+    if (depth > WALK_LIMITS.maxDepth) { truncated = true; return; }
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -42,10 +57,11 @@ export function walk(root: string, maxBytes = 2_000_000): ScanFile[] {
       return;
     }
     for (const entry of entries) {
+      if (out.length >= WALK_LIMITS.maxFiles || total >= WALK_LIMITS.maxTotalBytes) { truncated = true; return; }
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
-        recurse(full);
+        recurse(full, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
@@ -59,7 +75,10 @@ export function walk(root: string, maxBytes = 2_000_000): ScanFile[] {
       } catch {
         continue;
       }
-      if (stat.size > maxBytes || stat.size === 0) continue;
+      const limit = BIG_OK.test(entry.name) ? 40_000_000 : maxBytes;
+      if (stat.size === 0) continue;
+      if (stat.size > limit) { skippedLarge++; continue; }
+      total += stat.size;
 
       let text: string;
       try {
@@ -79,6 +98,6 @@ export function walk(root: string, maxBytes = 2_000_000): ScanFile[] {
     }
   };
 
-  recurse(root);
-  return out;
+  recurse(root, 0);
+  return { files: out, truncated, skippedLarge };
 }

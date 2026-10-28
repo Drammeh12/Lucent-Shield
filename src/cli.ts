@@ -9,6 +9,7 @@
 //   --out <file>            write the report to a file instead of stdout
 //   --min <severity>        only report this severity and above
 //                           (critical|high|medium|low|info)
+//   --offline               skip the online dependency vulnerability lookup
 //
 // It scans code you own: secrets, vulnerable dependencies, and insecure
 // patterns. It never changes your files and never sends your code anywhere
@@ -16,14 +17,9 @@
 
 import { writeFileSync, existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { walk } from "./util/walk.ts";
-import { scanSecrets } from "./scanners/secrets.ts";
-import { scanCode } from "./scanners/code.ts";
-import { scanDependencies } from "./scanners/dependencies.ts";
+import { scanRepoFolder, VERSION } from "./engine.ts";
 import { toJson, toMarkdown, toHtml } from "./report.ts";
 import { SEVERITY_RANK, SEVERITY_ORDER, countBySeverity, type ScanResult, type Severity } from "./types.ts";
-
-const VERSION = "0.1.0";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -37,7 +33,7 @@ async function main() {
   if (!command || command === "help" || command === "--help") {
     console.log(
       `Lucent Shield v${VERSION} — defensive security scanner by Bash Lucent\n\n` +
-        `  npm run scan -- <path> [--format json|md|html] [--out file] [--min severity]\n\n` +
+        `  npm run scan -- <path> [--format json|md|html] [--out file] [--min severity] [--offline]\n\n` +
         `Scans a repository you own for secrets, vulnerable dependencies and insecure code.\n` +
         `Only scan systems you own or are authorised to test.`
     );
@@ -59,14 +55,9 @@ async function main() {
   const startedAt = new Date().toISOString();
   console.error(`Lucent Shield: scanning ${target} …`);
 
-  const files = walk(target);
-  console.error(`  reading ${files.length} files`);
-
-  const findings = [
-    ...scanSecrets(files),
-    ...scanCode(files),
-    ...(await scanDependencies(target)),
-  ].filter((f) => SEVERITY_RANK[f.severity] <= minRank);
+  const scan = await scanRepoFolder(target, { offline: process.argv.includes("--offline") });
+  console.error(`  read ${scan.filesScanned} files`);
+  const findings = scan.findings.filter((f) => SEVERITY_RANK[f.severity] <= minRank);
 
   const result: ScanResult = {
     tool: "Lucent Shield",
@@ -75,7 +66,7 @@ async function main() {
     mode: "repo",
     startedAt,
     finishedAt: new Date().toISOString(),
-    filesScanned: files.length,
+    filesScanned: scan.filesScanned,
     findings,
   };
 

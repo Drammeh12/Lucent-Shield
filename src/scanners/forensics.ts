@@ -6,7 +6,7 @@
 //
 // This reads artifacts you already hold. It does not touch any live system.
 
-import { statSync, readFileSync } from "node:fs";
+import { statSync, createReadStream, openSync, readSync, closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { extname } from "node:path";
 import type { Finding } from "../types.ts";
@@ -41,11 +41,17 @@ const IOC_RULES: { rule: string; title: string; regex: RegExp; detail: string }[
   },
 ];
 
-function sha256(file: ScanFile): string {
-  return createHash("sha256").update(file.text).digest("hex");
+/** SHA-256 of the file's raw bytes, streamed, so it matches `sha256sum` and works on huge files. */
+function sha256(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = createHash("sha256");
+    createReadStream(path).on("data", (c) => h.update(c)).on("end", () => resolve(h.digest("hex"))).on("error", reject);
+  });
 }
 
-export function scanArtifact(path: string): Finding[] {
+const TEXT_LIMIT = 8_000_000; // bytes of a single large artifact read for text indicators
+
+export async function scanArtifact(path: string): Promise<Finding[]> {
   const findings: Finding[] = [];
 
   let isDir = false;
@@ -55,22 +61,31 @@ export function scanArtifact(path: string): Finding[] {
     return [{ rule: "forensic.not-found", severity: "info", category: "forensic", title: "Artifact not found", detail: `Could not open "${path}".`, remediation: "Check the path to the file or folder you want to inspect." }];
   }
 
-  const files = isDir ? walk(path) : singleFile(path);
+  const single = isDir ? null : singleFile(path);
+  const files = isDir ? walk(path) : single!.files;
 
-  // 1) Hash manifest — evidence integrity. Capped so a big folder stays readable.
+  // 1) Hash manifest for evidence integrity, over the exact bytes on disk.
   const manifestLimit = 40;
-  files.slice(0, manifestLimit).forEach((f) => {
+  for (const f of files.slice(0, manifestLimit)) {
+    let digest = "unreadable";
+    let size = 0;
+    try { digest = await sha256(f.path); size = statSync(f.path).size; } catch { /* keep going */ }
     findings.push({
       rule: "forensic.hash",
       severity: "info",
       category: "forensic",
-      title: `${f.rel} — ${extname(f.path) || "file"}`,
+      title: `${f.rel} (${extname(f.path) || "file"}, ${size.toLocaleString()} bytes)`,
       location: f.rel,
-      evidence: `sha256: ${sha256(f)}`,
-      detail: "Cryptographic hash of the artifact, for your evidence record and to check against threat-intelligence databases.",
-      remediation: "Record this hash with the date and where the artifact came from, to prove it has not changed.",
+      evidence: `sha256: ${digest}`,
+      detail: "SHA-256 of the artifact's exact bytes, for your evidence record and to look up in threat-intelligence databases. It matches what sha256sum reports.",
+      remediation: "Record this hash with the date, time and where the artifact came from, to prove later that it has not changed.",
     });
-  });
+  }
+  if (single?.partial) {
+    findings.push({ rule: "forensic.partial", severity: "info", category: "forensic", title: "Large artifact: indicators checked in the first 8 MB",
+      detail: "The full file was hashed, but only its first 8 MB were searched for credentials and indicators, to keep the scan fast.",
+      remediation: "For a full search, split the artifact (for example by log date) or extract the relevant part." });
+  }
   if (files.length > manifestLimit) {
     findings.push({ rule: "forensic.hash.more", severity: "info", category: "forensic", title: `${files.length - manifestLimit} more files not listed`, detail: "Only the first 40 file hashes are shown. Run on a single file for its full record.", remediation: "Narrow the inspection to the files of interest." });
   }
@@ -102,11 +117,16 @@ export function scanArtifact(path: string): Finding[] {
   return findings;
 }
 
-function singleFile(path: string): ScanFile[] {
+function singleFile(path: string): { files: ScanFile[]; partial: boolean } {
   try {
-    const text = readFileSync(path, "utf8");
-    return [{ path, rel: path.split("/").pop() || path, lines: text.split(/\r?\n/), text }];
+    const size = statSync(path).size;
+    const len = Math.min(size, TEXT_LIMIT);
+    const buf = Buffer.alloc(len);
+    const fd = openSync(path, "r");
+    try { readSync(fd, buf, 0, len, 0); } finally { closeSync(fd); }
+    const text = buf.toString("utf8");
+    return { files: [{ path, rel: path.split("/").pop() || path, lines: text.split(/\r?\n/), text }], partial: size > TEXT_LIMIT };
   } catch {
-    return [];
+    return { files: [], partial: false };
   }
 }

@@ -277,10 +277,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       if (asset.kind === "artifact" && (body.legal !== true || !String(body.reference ?? "").trim())) {
         return json(res, 403, { error: "Forensic examination requires a legal attestation and an authorization reference." });
       }
-      store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), reference: String(body.reference ?? "").trim() || undefined });
-      const result = await runScan(asset.kind, asset.target);
-      const updated = store.saveScan(id, result);
-      return json(res, 200, { asset: updated });
+      if (!store.beginScan(id)) return json(res, 409, { error: "This asset is already being scanned. Wait for it to finish." });
+      try {
+        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), reference: String(body.reference ?? "").trim() || undefined });
+        const result = await runScan(asset.kind, asset.target);
+        const updated = store.saveScan(id, result);
+        return json(res, 200, { asset: updated });
+      } finally {
+        store.endScan(id);
+      }
     }
     if (idMatch[2] === "/monitor" && method === "POST") {
       const body = await readBody(req);
@@ -309,6 +314,10 @@ const server = createServer(async (req, res) => {
     console.error("Request failed:", err instanceof Error ? err.message : err);
   }
 });
+
+// Deep scans (clone + dependency lookup) can take a while; don't cut them off.
+server.requestTimeout = 15 * 60_000;
+server.headersTimeout = 65_000;
 
 server.listen(PORT, () => {
   console.log(`Lucent Shield v${VERSION} running on http://localhost:${PORT}`);

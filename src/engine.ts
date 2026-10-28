@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, existsSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { walk } from "./util/walk.ts";
+import { walkWithStats, WALK_LIMITS } from "./util/walk.ts";
 import { scanSecrets } from "./scanners/secrets.ts";
 import { scanCode } from "./scanners/code.ts";
 import { scanDependencies } from "./scanners/dependencies.ts";
@@ -16,7 +16,7 @@ import { countBySeverity, type Finding, type ScanResult } from "./types.ts";
 
 const pexec = promisify(execFile);
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 
 export type AssetKind = "repo" | "web" | "artifact";
 export type Shield = "secure" | "at_risk" | "exposed" | "scanning" | "new";
@@ -51,12 +51,51 @@ async function cloneRepo(url: string): Promise<string> {
   return dir;
 }
 
-async function runRepo(dir: string): Promise<Finding[]> {
-  const files = walk(dir);
-  return [...scanSecrets(files), ...scanCode(files), ...(await scanDependencies(dir))];
+export interface RepoScanOptions {
+  /** Skip the network-backed dependency lookup. */
+  offline?: boolean;
+  /** HTTP client for the vulnerability database (swappable in tests). */
+  fetcher?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+
+const note = (rule: string, title: string, detail: string, remediation: string): Finding =>
+  ({ rule, severity: "info", category: "code", title, detail, remediation });
+
+/** Scans a folder with every source check. One failing check never stops the others. */
+export async function scanRepoFolder(dir: string, opts: RepoScanOptions = {}): Promise<{ findings: Finding[]; filesScanned: number }> {
+  const { files, truncated, skippedLarge } = walkWithStats(dir);
+  const findings: Finding[] = [];
+  const guard = (name: string, run: () => Finding[]) => {
+    try { findings.push(...run()); }
+    catch (err) { findings.push(note(`scan.${name.toLowerCase()}-failed`, `The ${name.toLowerCase()} check could not finish`, `It stopped with: ${err instanceof Error ? err.message : String(err)}. The other checks still ran.`, "Scan again. If it keeps happening, report it with the repository layout.")); }
+  };
+  guard("Secrets", () => scanSecrets(files));
+  guard("Code", () => scanCode(files));
+  if (!opts.offline) {
+    try { findings.push(...(await scanDependencies(dir, files, opts.fetcher))); }
+    catch (err) { findings.push(note("scan.dependencies-failed", "The dependency check could not finish", String(err instanceof Error ? err.message : err), "Scan again later.")); }
+  }
+  if (truncated) findings.push(note("scan.truncated", "Very large project: part of it was not scanned", `To protect the server, a scan reads at most ${WALK_LIMITS.maxFiles.toLocaleString()} files and ${Math.round(WALK_LIMITS.maxTotalBytes / 1e6)} MB. This project is bigger, so some files were skipped.`, "Scan the main application folders separately, or remove generated and vendored files from the repository."));
+  if (skippedLarge > 0) findings.push(note("scan.large-files-skipped", `${skippedLarge} very large file${skippedLarge === 1 ? " was" : "s were"} not read`, "Files over 2 MB (usually generated code, data or bundles) are skipped to keep scans fast.", "Keep secrets and source code out of large generated files."));
+  return { findings, filesScanned: files.length };
+}
+
+/** Runs the source scanners over a folder and returns the findings. */
+export async function runRepoScan(dir: string, opts: RepoScanOptions = {}): Promise<Finding[]> {
+  return (await scanRepoFolder(dir, opts)).findings;
 }
 
 export async function runScan(kind: AssetKind, target: string): Promise<ScanResult> {
+  try {
+    return await runScanInner(kind, target);
+  } catch (err) {
+    const now = new Date().toISOString();
+    return { tool: "Lucent Shield", version: VERSION, target, mode: kind === "web" ? "web" : "repo", startedAt: now, finishedAt: now, filesScanned: 0,
+      findings: [note("scan.failed", "The scan could not finish", `It stopped with: ${err instanceof Error ? err.message : String(err)}`, "Scan again. If it keeps failing, check the target is reachable.")] };
+  }
+}
+
+async function runScanInner(kind: AssetKind, target: string): Promise<ScanResult> {
   const startedAt = new Date().toISOString();
   let findings: Finding[] = [];
   let filesScanned = 0;
@@ -87,15 +126,14 @@ export async function runScan(kind: AssetKind, target: string): Promise<ScanResu
       return { tool: "Lucent Shield", version: VERSION, target, mode: "repo", startedAt, finishedAt: new Date().toISOString(), filesScanned: 0, findings };
     }
     try {
-      findings = await runRepo(dir);
-      filesScanned = walk(dir).length;
+      ({ findings, filesScanned } = await scanRepoFolder(dir));
     } finally {
       if (cleanup) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
     }
   } else if (kind === "web") {
     findings = await scanWeb(target);
   } else {
-    findings = scanArtifact(target);
+    findings = await scanArtifact(target);
     filesScanned = findings.filter((f) => f.rule === "forensic.hash").length;
   }
 

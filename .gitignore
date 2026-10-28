@@ -5,3 +5,4 @@ report.json
 report.md
 
 data/
+*.tmp

@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { resolveTxt } from "node:dns/promises";
 import { store } from "./store.ts";
 import { startMonitor } from "./monitor.ts";
 import { runScan, VERSION, type AssetKind } from "../engine.ts";
@@ -118,6 +119,32 @@ function serveStatic(res: ServerResponse, path: string) {
   res.end(readFileSync(file));
 }
 
+// Proof of domain ownership: the operator either serves a file with the token
+// at /.well-known/lucent-verify.txt, or publishes a DNS TXT record
+// "lucent-verify=<token>". Either one proves they control the site.
+async function verifyDomain(target: string, token: string): Promise<{ ok: boolean; method?: string }> {
+  if (!token) return { ok: false };
+  let u: URL;
+  try { u = new URL(target.includes("://") ? target : `https://${target}`); } catch { return { ok: false }; }
+
+  // File method — use the full host (with port if any); also try plain HTTP.
+  const bases = [`${u.protocol}//${u.host}`];
+  if (u.protocol === "https:") bases.push(`http://${u.host}`);
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base}/.well-known/lucent-verify.txt`, { redirect: "manual", signal: AbortSignal.timeout(8000) });
+      if (r.ok) { const t = (await r.text()).trim(); if (t.includes(token)) return { ok: true, method: "file" }; }
+    } catch { /* try next */ }
+  }
+  // DNS TXT method (per hostname, no port).
+  try {
+    const records = await resolveTxt(u.hostname);
+    for (const parts of records) { if (parts.join("").includes(`lucent-verify=${token}`)) return { ok: true, method: "dns" }; }
+  } catch { /* no record */ }
+
+  return { ok: false };
+}
+
 function passwordOk(input: string): boolean {
   if (!PASSWORD) return false;
   const a = createHash("sha256").update(input).digest();
@@ -220,11 +247,19 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 200, { asset: rest });
   }
 
-  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor)?$/);
+  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor|\/verify)?$/);
   if (idMatch) {
     const id = idMatch[1];
     const asset = store.get(id);
     if (!asset) return json(res, 404, { error: "Not found." });
+
+    if (idMatch[2] === "/verify" && method === "POST") {
+      if (asset.kind !== "web") return json(res, 400, { error: "Only websites need ownership verification." });
+      if (asset.verified) return json(res, 200, { verified: true, method: "already" });
+      const r = await verifyDomain(asset.target, asset.verifyToken);
+      if (r.ok) { store.setVerified(id, true); return json(res, 200, { verified: true, method: r.method }); }
+      return json(res, 200, { verified: false });
+    }
 
     if (idMatch[2] === "/scan" && method === "POST") {
       // Every scan needs explicit, per-run authorization — even after the
@@ -234,7 +269,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         return json(res, 403, { error: "Explicit authorization is required to run this test. Confirm you own or are authorised to test this target." });
       }
       if (asset.kind === "web" && !asset.authorized) return json(res, 403, { error: "Not authorised to scan this site." });
-      store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req) });
+      // A website must prove domain ownership before it can be scanned.
+      if (asset.kind === "web" && !asset.verified) {
+        return json(res, 403, { error: "Verify that you own this domain before scanning it." });
+      }
+      // Forensics carries the heaviest weight: require a legal attestation and a reference.
+      if (asset.kind === "artifact" && (body.legal !== true || !String(body.reference ?? "").trim())) {
+        return json(res, 403, { error: "Forensic examination requires a legal attestation and an authorization reference." });
+      }
+      store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), reference: String(body.reference ?? "").trim() || undefined });
       const result = await runScan(asset.kind, asset.target);
       const updated = store.saveScan(id, result);
       return json(res, 200, { asset: updated });

@@ -15,6 +15,10 @@ export interface Asset {
   target: string;
   /** The operator confirmed they own or are authorised to test this. */
   authorized: boolean;
+  /** Web assets must prove domain ownership before they can be scanned. */
+  verified: boolean;
+  /** The token the operator publishes (DNS or file) to prove domain ownership. */
+  verifyToken: string;
   /** Re-scan this asset automatically on the monitor schedule. */
   monitor: boolean;
   createdAt: string;
@@ -88,12 +92,17 @@ export const store = {
 
   add(input: { name: string; kind: AssetKind; target: string; authorized: boolean }): Asset {
     const assets = load();
+    const web = input.kind === "web";
     const asset: Asset = {
       id: randomUUID(),
       name: input.name,
       kind: input.kind,
       target: input.target,
       authorized: input.authorized,
+      // Only websites need domain-ownership proof; a local path or uploaded
+      // artifact is already on the operator's own machine.
+      verified: !web,
+      verifyToken: web ? randomUUID().replace(/-/g, "") : "",
       monitor: true,
       createdAt: new Date().toISOString(),
       lastScanAt: null,
@@ -102,6 +111,15 @@ export const store = {
       findings: [],
     };
     assets.push(asset);
+    persist(assets);
+    return asset;
+  },
+
+  setVerified(id: string, verified: boolean): Asset | undefined {
+    const assets = load();
+    const asset = assets.find((a) => a.id === id);
+    if (!asset) return undefined;
+    asset.verified = verified;
     persist(assets);
     return asset;
   },
@@ -163,7 +181,7 @@ export const store = {
   },
 
   /** Audit record: the operator gave explicit authorization to test a target. */
-  logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string }): void {
+  logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string; reference?: string }): void {
     let list: any[] = [];
     try { list = JSON.parse(readFileSync(AUTH_FILE, "utf8")); } catch { /* new file */ }
     list.unshift({ ...entry, at: new Date().toISOString() });

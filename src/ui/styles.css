@@ -214,6 +214,19 @@ a { color: var(--green); text-decoration: none; }
 .authbox .ghost { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 11px; padding: 11px 18px; }
 .authbox .ghost:hover { border-color: var(--muted); }
 .authbox .fine { color: var(--faint); font-size: 11px; margin-top: 10px; text-align: center; }
+.authbox .ah.danger { color: var(--red); }
+.authbox .al { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 10px 0 5px; }
+.authbox .aref { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); font: inherit; outline: none; }
+.authbox .aref:focus { border-color: var(--green2); }
+
+/* verify drawer + card ownership badges */
+.vmethod { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; margin: 12px 0; }
+.vmethod .vt { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.vmethod p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.vstatus { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.vstatus.ok { color: var(--green); } .vstatus.bad { color: #ff8a8a; }
+.card .unver { font-size: 11.5px; color: var(--amber); font-weight: 600; }
+.card .ver { font-size: 11.5px; color: var(--green); font-weight: 600; }
 
 /* ============ drawer ============ */
 .drawer-bg { position: fixed; inset: 0; background: rgba(2,5,12,.62); backdrop-filter: blur(3px); z-index: 40; }

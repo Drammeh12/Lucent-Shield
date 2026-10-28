@@ -262,28 +262,76 @@
 
   // Explicit, per-run authorization before ANY test (white box, black box or
   // forensics). Required every time, even after the terms were accepted.
+  // Resolves to false (cancelled) or { reference } once the operator affirms.
   function authorizeScan(kind, target) {
     return new Promise((resolve) => {
+      const forensic = kind === "artifact";
       const label = kind === "repo" ? "white-box (full code) test" : kind === "web" ? "black-box (external) test" : "forensic examination";
       const noun = kind === "repo" ? "repository or folder" : kind === "web" ? "website" : "file or artifact";
       const bg = document.createElement("div"); bg.className = "drawer-bg";
       const m = document.createElement("div"); m.className = "authbox";
       m.innerHTML = `
-        <div class="ah">${ic("shield", 20)} Authorization required</div>
+        <div class="ah ${forensic ? "danger" : ""}">${ic("shield", 20)} ${forensic ? "Legal authorization required" : "Authorization required"}</div>
         <p>You are about to run a <b>${label}</b> against:</p>
         <div class="tgt">${esc(target)}</div>
-        <p class="warn">Only test systems you own or have explicit permission to test. Running a test against a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.</p>
+        <p class="warn">${forensic
+          ? "Forensic examination can reveal personal and sensitive data. You may only do it with lawful authority — ownership, written permission, or a warrant or court order. Doing it without authority is a serious offence, and the responsibility is entirely yours."
+          : `Only test systems you own or have explicit permission to test. Running a test against a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.`}</p>
+        ${forensic ? `
+        <label class="al">Authorization reference</label>
+        <input class="aref" id="authRef" maxlength="200" placeholder="Warrant / court order / written-permission reference">
+        <label class="chk2"><input type="checkbox" id="authLegal"><span>I attest that I hold lawful authority (ownership, written permission, or a warrant or court order) to examine this, and I can produce it on request.</span></label>` : ""}
         <label class="chk2"><input type="checkbox" id="authChk"><span>I confirm I own this ${noun} or have explicit authorisation to test it, and I give Lucent Shield explicit permission to scan it and identify vulnerabilities.</span></label>
         <div class="arow"><button class="ghost" id="authCancel">Cancel</button><button class="btn" id="authGo" disabled>Authorise &amp; run</button></div>
-        <div class="fine">This authorisation is recorded with a timestamp.</div>`;
+        <div class="fine">This authorisation${forensic ? " and reference are" : " is"} recorded with a timestamp.</div>`;
       document.body.append(bg, m);
       const done = (v) => { bg.remove(); m.remove(); resolve(v); };
       bg.onclick = () => done(false);
       m.querySelector("#authCancel").onclick = () => done(false);
       const chk = m.querySelector("#authChk"), go = m.querySelector("#authGo");
-      chk.onchange = () => { go.disabled = !chk.checked; };
-      go.onclick = () => { if (chk.checked) done(true); };
+      const legal = m.querySelector("#authLegal"), ref = m.querySelector("#authRef");
+      const sync = () => { go.disabled = !(chk.checked && (!forensic || (legal.checked && ref.value.trim()))); };
+      chk.onchange = sync; if (forensic) { legal.onchange = sync; ref.oninput = sync; }
+      go.onclick = () => { if (!go.disabled) done({ reference: forensic ? ref.value.trim() : "" }); };
     });
+  }
+
+  // Scan an asset through the API with the per-run authorization payload.
+  function scanApi(id, auth, kind) {
+    return api(`/api/assets/${id}/scan`, { method: "POST", body: { authorized: true, legal: kind === "artifact", reference: auth?.reference || "" } });
+  }
+
+  // Domain-ownership verification: prove control of the site before scanning it.
+  function openVerify(asset, onVerified) {
+    const host = esc(asset.target.replace(/^https?:\/\//, "").replace(/\/.*$/, ""));
+    const tok = esc(asset.verifyToken);
+    const body = `
+      <h2>Verify you own ${host}</h2>
+      <div class="sub">Lucent Shield will not scan a website until you prove you control it. Choose one method, then press Verify.</div>
+      <div class="vmethod"><div class="vt">Option 1 — host a file</div>
+        <p>Put a file at this exact address, containing the token below:</p>
+        <div class="tgt">https://${host}/.well-known/lucent-verify.txt</div></div>
+      <div class="vmethod"><div class="vt">Option 2 — add a DNS record</div>
+        <p>Add this TXT record to <b>${host}</b>:</p>
+        <div class="tgt">lucent-verify=${tok}</div></div>
+      <div class="vmethod"><div class="vt">Your token</div><div class="tgt">${tok}</div></div>
+      <div class="arow"><button class="btn" id="vGo">Verify ownership</button></div>
+      <div class="vstatus" id="vStatus"></div>`;
+    const d = drawer(body);
+    const st = d.querySelector("#vStatus"), go = d.querySelector("#vGo");
+    go.onclick = async () => {
+      st.textContent = "Checking…"; st.className = "vstatus";
+      try {
+        const r = await api(`/api/assets/${asset.id}/verify`, { method: "POST" });
+        if (r.verified) {
+          st.textContent = "Verified. Ownership confirmed."; st.className = "vstatus ok";
+          await refresh();
+          setTimeout(() => { d.close(); const fresh = ASSETS.find((a) => a.id === asset.id) || { ...asset, verified: true }; if (onVerified) onVerified(fresh); else renderView(); }, 800);
+        } else {
+          st.textContent = "Not found yet. DNS or the file can take a few minutes — try again shortly."; st.className = "vstatus bad";
+        }
+      } catch (ex) { st.textContent = ex.message; st.className = "vstatus bad"; }
+    };
   }
 
   async function runScanSequence(target) {
@@ -294,9 +342,17 @@
       const r = await api("/api/assets", { method: "POST", body: { name: target.replace(/^https?:\/\//, ""), kind: "web", target, authorized: true } });
       asset = r.asset;
     } catch (ex) { alert(ex.message); return; }
+    await refresh();
+    const fresh = ASSETS.find((a) => a.id === asset.id) || asset;
+    // A website must prove domain ownership before the first scan.
+    if (!fresh.verified) { if (VIEW === "dashboard") renderView(); openVerify(fresh, () => startScanSequence(fresh)); return; }
+    startScanSequence(fresh);
+  }
+
+  async function startScanSequence(asset) {
     const host = asset.name;
     SEQ = true;
-    ASSETS = [{ ...asset }, ...ASSETS];
+    if (!ASSETS.find((a) => a.id === asset.id)) ASSETS = [{ ...asset }, ...ASSETS];
     renderView();
     enterSeq(); setFocusIcon(asset); setHero("scanning", `Scanning ${esc(host)}…`); setStatus("SCANNING");
     const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
@@ -388,6 +444,7 @@
   function cardHtml(a) {
     const pills = [["c", a.counts.critical, "critical"], ["h", a.counts.high, "high"], ["m", a.counts.medium, "medium"], ["l", a.counts.low, "low"]]
       .filter(([, n]) => n).map(([cl, n, l]) => `<span class="pill ${cl}">${n} ${l}</span>`).join("");
+    const unverified = a.kind === "web" && !a.verified;
     return `<div class="card s-${a.shield}" data-id="${a.id}">
       <span class="kind">${KIND_LABEL[a.kind] || a.kind}</span>
       <button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Monitoring on — click to pause" : "Paused — click to watch"}">${a.monitor ? "● watching" : "○ paused"}</button>
@@ -395,10 +452,11 @@
       ${lockSvg("padlock")}
       <div class="name">${esc(a.name)}</div>
       <div class="target">${esc(a.target)}</div>
+      ${unverified ? `<div class="unver">⚠ Ownership not verified</div>` : a.kind === "web" ? `<div class="ver">✓ Ownership verified</div>` : ""}
       <div class="state">${STATE_LABEL[a.shield]}</div>
       ${pills ? `<div class="counts">${pills}</div>` : ""}
       ${a.lastScanAt ? `<div class="scanned">scanned ${timeAgo(a.lastScanAt)}</div>` : ""}
-      <div class="actions"><button data-act="scan">Scan now</button>${a.lastScanAt ? `<button data-act="view">Report</button>` : ""}</div>
+      <div class="actions">${unverified ? `<button data-act="verify">Verify ownership</button>` : `<button data-act="scan">Scan now</button>`}${a.lastScanAt ? `<button data-act="view">Report</button>` : ""}</div>
     </div>`;
   }
 
@@ -408,16 +466,19 @@
       e.preventDefault(); const err = document.getElementById("addErr"); err.textContent = "";
       const name = form.name.value.trim(), kind = kindSel.value, target = form.target.value.trim();
       if (!name || !target) { err.textContent = "Give it a name and a target."; return; }
-      if (!(await authorizeScan(kind, target))) return;
+      const auth = await authorizeScan(kind, target);
+      if (!auth) return;
       try {
         const { asset } = await api("/api/assets", { method: "POST", body: { name, kind, target, authorized: true } });
-        form.reset(); await refresh(); renderView(); scanAsset(asset.id, { preauth: true });
+        form.reset(); await refresh(); renderView(); scanAsset(asset.id, { preauth: true, auth });
       } catch (ex) { err.textContent = ex.message; }
     };
     document.getElementById("grid").onclick = (e) => {
       const card = e.target.closest(".card"); if (!card) return;
       const id = card.dataset.id, act = e.target.dataset.act;
-      if (act === "scan") scanAsset(id); else if (act === "view") openReport(id); else if (act === "del") removeAsset(id); else if (act === "mon") toggleMonitor(id);
+      if (act === "scan") scanAsset(id);
+      else if (act === "verify") { const a = ASSETS.find((x) => x.id === id); if (a) openVerify(a, () => renderView()); }
+      else if (act === "view") openReport(id); else if (act === "del") removeAsset(id); else if (act === "mon") toggleMonitor(id);
     };
   }
 
@@ -426,12 +487,15 @@
 
   async function scanAsset(id, opts = {}) {
     const a0 = ASSETS.find((x) => x.id === id); if (!a0) return;
-    if (!opts.preauth && !(await authorizeScan(a0.kind, a0.target))) return;
+    // A website must prove ownership before it can be scanned.
+    if (a0.kind === "web" && !a0.verified) { openVerify(a0, () => scanAsset(id, opts)); return; }
+    let auth = opts.auth;
+    if (!opts.preauth) { auth = await authorizeScan(a0.kind, a0.target); if (!auth) return; }
     const el = cardEl(id);
     if (el) { el.className = "card s-scanning scan-sweep"; const s = el.querySelector(".state"); if (s) s.textContent = "Scanning…"; }
     if (VIEW === "dashboard") { const hs = document.querySelector(".herolock"); if (hs) hs.className = "herolock scanning"; }
     try {
-      const { asset } = await api(`/api/assets/${id}/scan`, { method: "POST", body: { authorized: true } });
+      const { asset } = await scanApi(id, auth, a0.kind);
       ASSETS = ASSETS.map((a) => (a.id === id ? { ...a, ...asset } : a));
       await refreshCounts();
       if (VIEW === "assets") setCard(id); else renderView();
@@ -467,6 +531,8 @@
     document.body.append(bg, d);
     const close = () => { bg.remove(); d.remove(); };
     bg.onclick = close; d.querySelector(".x").onclick = close;
+    d.close = close;
+    return d;
   }
 
   // ---------- reports / settings ----------

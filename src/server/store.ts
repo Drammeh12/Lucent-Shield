@@ -26,6 +26,8 @@ export interface Asset {
   shield: Shield;
   counts: ReturnType<typeof countBySeverity>;
   findings: Finding[];
+  /** How many files the last scan read (repo and forensic scans). */
+  filesScanned?: number;
 }
 
 export type AlertType = "worsened" | "recovered" | "new-issues";
@@ -162,6 +164,7 @@ export const store = {
     asset.findings = result.findings;
     asset.counts = countBySeverity(result.findings);
     asset.shield = shieldFor(result.findings);
+    asset.filesScanned = result.filesScanned;
     persist(assets);
     const meta = loadMeta();
     meta.scans++;

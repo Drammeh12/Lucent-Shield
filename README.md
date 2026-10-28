@@ -13,6 +13,7 @@ Lucent Shield watches the code and websites you own, tells you in plain words wh
 - Leaked secrets: API keys, tokens, private keys and passwords committed to code (AWS, Stripe, Paystack, GitHub, Google, Slack, JWTs, and generic assignments). Evidence is redacted, so the report is safe to share.
 - Vulnerable dependencies: npm (`package.json`) and PyPI (`requirements.txt`) checked against the [OSV](https://osv.dev) database of known vulnerabilities, with the fixed version to move to.
 - Insecure code patterns: command injection, `eval`, XSS sinks, wildcard CORS, unpinned `jwt.verify`, disabled TLS checks, weak randomness, `subprocess(shell=True)`, `yaml.load`, `pickle`, debug mode, weak password hashing, and more.
+- Data flow: in PHP, Python and JavaScript it follows request input through your variables, even across several lines, to where it is used. If it reaches a database query, a shell command, a file path, an outbound request or a redirect without being cleaned or checked first, that is reported along with the line where the input came in. Input that passes through a sanitiser (like `intval` or `int()`) or a validation check (like `is_numeric` or an allow list) is recognised as safe.
 
 **Black box, your website.** Give it a site you own and it checks the outside view the way a visitor's browser sees it: security headers, TLS, cookie flags, information disclosure, and files that should never be public. Every request is read only. It never fuzzes, brute forces or changes anything.
 
@@ -82,6 +83,13 @@ Settings you pass through the environment:
 - `LUCENT_GITHUB_TOKEN`: a token so white box scans can reach your private GitHub repositories.
 - `LUCENT_ALERT_WEBHOOK`: a Slack or Discord webhook to also receive monitoring alerts.
 - `LUCENT_DATA_DIR`: where to keep your assets and history (defaults to `/data` in Docker).
+
+## How well it works
+
+Lucent Shield is checked two ways, and you can run both yourself with `npm test` and `npm run bench`.
+
+- A built-in benchmark plants 104 known issues in a sample project, next to safe code that looks almost the same. It catches all 104 and raises no false alarms on the safe code.
+- It is also run against well-known, deliberately vulnerable open-source apps: OWASP NodeGoat, DVWA and PyGoat. It finds their documented SQL injection, command injection, file inclusion, SSRF and path traversal flaws, and leaves their secure reference code alone. On real production codebases the data-flow checks add no false alarms.
 
 ## Honest limits
 

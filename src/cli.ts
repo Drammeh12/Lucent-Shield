@@ -32,7 +32,7 @@ async function main() {
 
   if (!command || command === "help" || command === "--help") {
     console.log(
-      `Lucent Shield v${VERSION} — defensive security scanner by Bash Lucent\n\n` +
+      `Lucent Shield v${VERSION}, a defensive security scanner by Bash Lucent\n\n` +
         `  npm run scan -- <path> [--format json|md|html] [--out file] [--min severity] [--offline]\n\n` +
         `Scans a repository you own for secrets, vulnerable dependencies and insecure code.\n` +
         `Only scan systems you own or are authorised to test.`

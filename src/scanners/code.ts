@@ -4,11 +4,12 @@
 // Kubernetes YAML, Terraform, GitHub Actions). These are careful heuristics,
 // so each finding is a strong lead to confirm rather than a proven exploit.
 
-import type { Finding, Severity } from "../types.ts";
+import { SEVERITY_RANK, type Finding, type Severity } from "../types.ts";
 import type { ScanFile } from "../util/walk.ts";
 import { redactLine } from "../util/redact.ts";
 import { extname } from "node:path";
 import { insideLiteral, isTestPath, isSuppressed } from "../util/source.ts";
+import { traceTaint, type TaintLang } from "./taint.ts";
 
 type Lang = "js" | "py" | "php" | "java" | "go" | "rb" | "cs" | "docker" | "yaml" | "gha" | "tf" | "shell";
 
@@ -425,6 +426,53 @@ function dockerChecks(file: ScanFile): Finding[] {
   return out;
 }
 
+// Rules that only the taint pass produces (the rest reuse the line rules' wording).
+const TAINT_META: Record<string, { title: string; severity: Severity; detail: string; remediation: string }> = {
+  "code.php.path-traversal": {
+    title: "File or URL chosen by the request", severity: "high",
+    detail: "The server opens a file or URL whose name comes from the request. With ../ an attacker can read files such as configuration or keys, and with a URL they can make the server fetch internal addresses.",
+    remediation: "Map the input to a fixed allow list, or keep only the base name with basename() and read from a fixed folder.",
+  },
+  "code.php.ssrf": {
+    title: "Server-side request forgery: the request chooses the URL", severity: "high",
+    detail: "The server fetches an address taken from the request, so an attacker can make it call internal services or cloud metadata.",
+    remediation: "Only allow known hosts, and block private and link-local addresses before fetching.",
+  },
+  "code.php.open-redirect": {
+    title: "Open redirect: the request chooses where to send the user", severity: "medium",
+    detail: "The redirect target comes from the request, which lets attackers send people from your trusted domain to a phishing page.",
+    remediation: "Redirect only to relative paths or to an allow list of your own URLs.",
+  },
+  "code.py.ssrf": {
+    title: "Server-side request forgery: the request chooses the URL", severity: "high",
+    detail: "The server fetches an address taken from the request, so an attacker can make it call internal services or cloud metadata.",
+    remediation: "Only allow known hosts, and block private and link-local addresses before fetching.",
+  },
+  "code.py.path-traversal": {
+    title: "File path chosen by the request", severity: "high",
+    detail: "A file is opened with a path that comes from the request. With ../ an attacker can read or overwrite files outside the intended folder.",
+    remediation: "Use werkzeug's secure_filename or os.path.basename, join it to a fixed folder, and check the result stays inside that folder.",
+  },
+  "code.py.open-redirect": {
+    title: "Open redirect: the request chooses where to send the user", severity: "medium",
+    detail: "The redirect target comes from the request, which lets attackers send people from your trusted domain to a phishing page.",
+    remediation: "Redirect only to relative paths or to an allow list of your own URLs, for example with url_has_allowed_host_and_scheme.",
+  },
+  "code.py.xss": {
+    title: "Cross-site scripting: request data marked safe as HTML", severity: "high",
+    detail: "Request data is put into HTML without escaping, so a crafted link can run scripts for whoever opens it.",
+    remediation: "Let the template engine escape the value, or escape it with html.escape before marking anything safe.",
+  },
+};
+
+const TAINT_LANGS: Partial<Record<Lang, TaintLang>> = { php: "php", py: "py", js: "js" };
+
+function metaFor(rule: string): { title: string; severity: Severity; detail: string; remediation: string } | null {
+  if (TAINT_META[rule]) return TAINT_META[rule];
+  const r = RULES.find((x) => x.rule === rule);
+  return r ? { title: r.title, severity: r.severity, detail: r.detail, remediation: r.remediation } : null;
+}
+
 export function scanCode(files: ScanFile[]): Finding[] {
   const findings: Finding[] = [];
 
@@ -437,12 +485,15 @@ export function scanCode(files: ScanFile[]): Finding[] {
     const applicable = RULES.filter((r) => r.langs.some((l) => langs.has(l)) && (!r.fileHas || r.fileHas.test(file.text)));
 
     if (langs.has("docker")) findings.push(...dockerChecks(file));
-    if (applicable.length === 0) continue;
+    const skip = (i: number) => {
+      const line = file.lines[i];
+      const trimmed = line.trim();
+      return line.length > 2000 || !trimmed || isComment(trimmed, langs) || isSuppressed(file.lines, i);
+    };
+    const direct: Finding[] = [];
 
     file.lines.forEach((line, i) => {
-      if (line.length > 2000) return;
-      const trimmed = line.trim();
-      if (!trimmed || isComment(trimmed, langs) || isSuppressed(file.lines, i)) return;
+      if (applicable.length === 0 || skip(i)) return;
 
       for (const rule of applicable) {
         const m = rule.regex.exec(line);
@@ -452,12 +503,43 @@ export function scanCode(files: ScanFile[]): Finding[] {
         let severity: Severity | null = rule.escalate && rule.escalate.when.test(line) ? rule.escalate.to : rule.severity;
         if (rule.refine) severity = rule.refine(line, file.lines, i, severity);
         if (!severity) continue;
-        findings.push({
+        direct.push({
           rule: rule.rule, severity, category: "code", title: rule.title,
           location: file.rel, line: i + 1, evidence: redactLine(line), detail: rule.detail, remediation: rule.remediation,
         });
       }
     });
+    // Follow request input through variables to dangerous calls.
+    const traced = [...langs].map((l) => TAINT_LANGS[l]).filter((x): x is TaintLang => !!x).map((tl) => traceTaint(file.lines, tl, file.text, skip));
+
+    // Where request input reaches a call only after it was sanitised or
+    // validated, the line rule's "built from variables" warning is resolved.
+    const resolved = (f: Finding) => traced.some((t) => t.cleared.some((c) => c.rule === f.rule && f.line! - 1 >= c.line && f.line! - 1 <= c.end));
+    findings.push(...direct.filter((f) => !resolved(f)));
+
+    for (const t of traced) {
+      for (const h of t.hits) {
+        const meta = metaFor(h.rule);
+        if (!meta) continue;
+        const where = h.origin >= 0
+          ? ` Here the value traces back to request input on line ${h.origin + 1}.`
+          : " Here the path is a variable set in another file. Confirm the request cannot choose it.";
+        const severity = h.severity ?? meta.severity;
+        // The line rule already reported this statement: keep one finding, at
+        // the higher severity, with the data-flow explanation.
+        const same = findings.find((f) => f.location === file.rel && f.rule === h.rule && f.line! - 1 >= h.line && f.line! - 1 <= h.end);
+        if (same) {
+          if (SEVERITY_RANK[severity] < SEVERITY_RANK[same.severity]) same.severity = severity; // lower rank = more severe
+          if (!same.detail.includes("traces back")) same.detail += where;
+          continue;
+        }
+        findings.push({
+          rule: h.rule, severity: h.severity ?? meta.severity, category: "code", title: meta.title,
+          location: file.rel, line: h.line + 1, evidence: redactLine(file.lines[h.line]),
+          detail: meta.detail + where, remediation: meta.remediation,
+        });
+      }
+    }
   }
 
   return findings;

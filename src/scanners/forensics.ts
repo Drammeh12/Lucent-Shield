@@ -19,13 +19,13 @@ const IOC_RULES: { rule: string; title: string; regex: RegExp; detail: string }[
     rule: "forensic.ioc.download-exec",
     title: "Download-and-run command",
     regex: /\b(curl|wget)\b[^\n|]*\|\s*(sh|bash|python|powershell)\b|Invoke-WebRequest[^\n]*\|\s*iex/i,
-    detail: "A command fetches something from the internet and runs it immediately — a very common malware installer pattern.",
+    detail: "A command fetches something from the internet and runs it immediately, a very common way malware gets installed.",
   },
   {
     rule: "forensic.ioc.encoded-command",
     title: "Encoded PowerShell / shell command",
     regex: /powershell[^\n]*-e(nc(odedcommand)?)?\s+[A-Za-z0-9+/=]{30,}|base64\s+-d\s*\|\s*(sh|bash)/i,
-    detail: "An encoded command hides what it does from casual inspection — often used to evade detection.",
+    detail: "An encoded command hides what it does from casual inspection, a trick often used to avoid detection.",
   },
   {
     rule: "forensic.ioc.ip",

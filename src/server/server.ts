@@ -10,6 +10,9 @@ import { resolveTxt } from "node:dns/promises";
 import { store } from "./store.ts";
 import { startMonitor } from "./monitor.ts";
 import { runScan, VERSION, type AssetKind } from "../engine.ts";
+import { classify } from "../catalog.ts";
+import { toHtml, toMarkdown, toJson } from "../report.ts";
+import { sortFindings, type Finding, type ScanResult } from "../types.ts";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
 const PORT = Number(process.env.PORT) || 4600;
@@ -247,7 +250,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 200, { asset: rest });
   }
 
-  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor|\/verify)?$/);
+  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor|\/verify|\/report)?$/);
   if (idMatch) {
     const id = idMatch[1];
     const asset = store.get(id);
@@ -292,7 +295,31 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       const updated = store.setMonitor(id, body.on !== false);
       return json(res, 200, { asset: updated });
     }
-    if (method === "GET") return json(res, 200, { asset });
+    // Downloadable report of the last scan: ?format=html|md|json
+    if (idMatch[2] === "/report" && method === "GET") {
+      if (!asset.lastScanAt) return json(res, 404, { error: "Scan this asset first." });
+      const format = new URL(req.url ?? "/", "http://x").searchParams.get("format") ?? "html";
+      const result: ScanResult = { tool: "Lucent Shield", version: VERSION, target: asset.target, mode: asset.kind === "web" ? "web" : "repo",
+        startedAt: asset.lastScanAt, finishedAt: asset.lastScanAt, filesScanned: asset.filesScanned ?? 0, findings: asset.findings };
+      const slug = asset.name.replace(/[^A-Za-z0-9.-]+/g, "-").slice(0, 60) || "asset";
+      const day = asset.lastScanAt.slice(0, 10);
+      const [body, type, ext] = format === "json" ? [toJson(result), "application/json; charset=utf-8", "json"]
+        : format === "md" ? [toMarkdown(result), "text/markdown; charset=utf-8", "md"]
+        : [toHtml(result), "text/html; charset=utf-8", "html"];
+      res.writeHead(200, {
+        "Content-Type": type,
+        "Content-Disposition": `attachment; filename="lucent-shield-${slug}-${day}.${ext}"`,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        "Cache-Control": "no-store",
+      });
+      return res.end(body);
+    }
+
+    if (method === "GET") {
+      const findings = sortFindings(asset.findings).map((f: Finding) => ({ ...f, ...(classify(f.rule) ?? {}) }));
+      return json(res, 200, { asset: { ...asset, findings } });
+    }
     if (method === "DELETE") {
       store.remove(id);
       return json(res, 200, { ok: true });
@@ -321,6 +348,6 @@ server.headersTimeout = 65_000;
 
 server.listen(PORT, () => {
   console.log(`Lucent Shield v${VERSION} running on http://localhost:${PORT}`);
-  if (!PASSWORD) console.log("  (no LUCENT_PASSWORD set — open mode, for local use only)");
+  if (!PASSWORD) console.log("  (no LUCENT_PASSWORD set, so it runs in open mode, for local use only)");
   startMonitor();
 });

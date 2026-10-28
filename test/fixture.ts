@@ -134,6 +134,20 @@ export function buildFixture(root: string): { expected: Expect[]; decoys: string
   files["composer.lock"] = JSON.stringify({ packages: [{ name: "guzzlehttp/guzzle", version: "6.5.0" }] });
   files["Cargo.lock"] = "[[package]]\nname = \"hyper\"\nversion = \"0.14.10\"\n";
 
+  // ------- data flow: request input reaches a dangerous call through variables -------
+  add("flow/ping.php", "<?php\n$ip = $_POST['ip'];\n$out = shell_exec('ping -c 1 ' . $ip);", "code.php.command-injection");
+  add("flow/user.php", "<?php\n$id = $_GET['id'];\n$sql = \"SELECT name FROM users WHERE id = '$id'\";\n$res = mysqli_query($db, $sql);", "code.php.sql-injection");
+  add("flow/page.php", "<?php\n$page = $_GET['page'];\ninclude($page);", "code.php.file-inclusion");
+  add("flow/view.php", "<?php\nrequire_once 'source/level.php';\ninclude($file);", "code.php.file-inclusion");
+  add("flow/login.py", "def login(request):\n    user = request.POST.get(\"user\")\n    query = (\n        f\"SELECT * FROM accounts WHERE name = '{user}'\"\n    )\n    cursor.execute(query)", "code.py.sql-injection");
+  add("flow/lookup.py", "def lookup(request):\n    host = request.GET[\"host\"]\n    cmd = f\"nslookup {host}\"\n    proc = subprocess.Popen(\n        cmd, shell=True, stdout=subprocess.PIPE\n    )", "code.py.subprocess-shell");
+  add("flow/proxy.py", "def proxy(request):\n    target = request.args.get(\"url\")\n    return requests.get(target).text", "code.py.ssrf");
+  add("flow/read.py", "def read(request):\n    name = request.args[\"f\"]\n    with open(\"/srv/files/\" + name) as fh:\n        return fh.read()", "code.py.path-traversal");
+  add("flow/fetch.js", "app.get(\"/fetch\", async (req, res) => {\n  const { url } = req.query;\n  const r = await axios.get(url);\n  res.json(r.data);\n});", "code.js.ssrf");
+  add("flow/zip.js", "app.post(\"/zip\", (req, res) => {\n  const name = req.body.name;\n  const cmd = \"zip out.zip \" + name;\n  exec(cmd);\n});", "code.js.command-injection");
+  add("flow/file.js", "app.get(\"/file\", (req, res) => {\n  const f = req.params.name;\n  res.sendFile(path.join(__dirname, \"files\", f));\n});", "code.js.path-traversal");
+  add("flow/go.js", "app.get(\"/go\", (req, res) => {\n  const next = req.query.next;\n  res.redirect(next);\n});", "code.js.open-redirect");
+
   // ---------------- decoys: safe code that must NOT be flagged ----------------
   const decoys: Record<string, string> = {
     "safe/env.js": "const key = process.env.STRIPE_SECRET_KEY;\nconst password = process.env.DB_PASSWORD;",
@@ -153,6 +167,20 @@ export function buildFixture(root: string): { expected: Expect[]; decoys: string
     "safe/.env.example": "DATABASE_PASSWORD=changeme\nSTRIPE_SECRET=",
     "safe/Dockerfile": "FROM node:22-slim\nUSER node\nCMD [\"node\", \"server.js\"]",
     "safe/echo.php": "<?php echo htmlspecialchars($_GET['name'], ENT_QUOTES);",
+    // Data flow that is safe: sanitised, validated, parameterised, or not controlling the target.
+    "safe/flow-int.php": "<?php\n$id = intval($_GET['id']);\nmysqli_query($db, \"SELECT * FROM u WHERE id = $id\");",
+    "safe/flow-cast.php": "<?php\n$n = (int)$_GET['n'];\n$r = $pdo->query(\"SELECT * FROM t LIMIT $n\");",
+    "safe/flow-guard.php": "<?php\n$ip = $_POST['ip'];\nif (filter_var($ip, FILTER_VALIDATE_IP)) {\n    $out = shell_exec('ping -c 1 ' . $ip);\n}",
+    "safe/flow-exit.php": "<?php\n$page = $_GET['page'];\nif (!in_array($page, ['home', 'about'], true)) { exit; }\ninclude($page . '.php');",
+    "safe/flow-escape.php": "<?php\n$name = $_GET['name'];\necho htmlspecialchars($name, ENT_QUOTES);",
+    "safe/flow-param.py": "def get_user(request):\n    uid = request.GET.get(\"id\")\n    cursor.execute(\"SELECT * FROM users WHERE id = %s\", (uid,))",
+    "safe/flow-list.py": "def ping(request):\n    host = request.GET[\"host\"]\n    subprocess.run([\"ping\", \"-c\", \"1\", host])",
+    "safe/flow-scope.py": "def a(request):\n    cmd = request.GET[\"c\"]\n    return cmd\n\ndef b():\n    os.system(cmd)",
+    "safe/flow-digits.py": "def run(request):\n    n = request.GET[\"n\"]\n    if n.isdigit():\n        os.system(\"sleep \" + n)",
+    "safe/flow-relative.js": "app.get(\"/u/:id\", async (req, res) => {\n  const id = req.params.id;\n  const data = await fetch(`${API_BASE}/users/${id}`);\n  res.redirect(`/profile/${id}`);\n});",
+    "safe/flow-number.js": "app.get(\"/sleep\", (req, res) => {\n  const n = Number(req.query.n);\n  const cmd = \"sleep \" + n;\n  execSync(cmd);\n});",
+    "safe/flow-prisma.js": "import { PrismaClient } from \"@prisma/client\";\napp.get(\"/posts\", async (req, res) => {\n  const authorId = req.query.author;\n  const n = await prisma.post.count({ where: { authorId } });\n  res.json({ n });\n});",
+    "safe/flow-db.js": "app.get(\"/u\", async (req, res) => {\n  const id = req.query.id;\n  const rows = await db.query(\"SELECT * FROM users WHERE id = ?\", [id]);\n  res.json(rows);\n});",
   };
 
   for (const [file, body] of Object.entries({ ...files, ...decoys })) {

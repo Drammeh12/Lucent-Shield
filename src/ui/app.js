@@ -1,6 +1,9 @@
 "use strict";
 (() => {
   const root = document.getElementById("root");
+  // A site with no favicon falls back to the globe glyph. Error events do not
+  // bubble, so listen in the capture phase (inline onerror is blocked by our CSP).
+  document.addEventListener("error", (e) => { if (e.target instanceof HTMLImageElement && e.target.classList.contains("fav")) e.target.remove(); }, true);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   function timeAgo(iso) {
     if (!iso) return "never";
@@ -56,7 +59,7 @@
   // real favicon (fetched server-side); repos and artifacts show a glyph.
   function flowIcon(asset) {
     const glyph = asset?.kind === "repo" ? ic("code", 18) : asset?.kind === "artifact" ? ic("finger", 18) : ic("globe", 18);
-    const img = asset?.kind === "web" ? `<img class="fav" src="/api/favicon?u=${encodeURIComponent(asset.target)}" alt="" onerror="this.remove()">` : "";
+    const img = asset?.kind === "web" ? `<img class="fav" src="/api/favicon?u=${encodeURIComponent(asset.target)}" alt="">` : "";
     return `<div class="flow"><span class="glyph">${glyph}</span>${img}</div>`;
   }
   // Which asset the big padlock represents right now.
@@ -192,7 +195,7 @@
   function buildActivity() {
     const items = [];
     for (const al of ALERTS) items.push({ text: al.message.replace(/^[🔓🔒]\s*Lucent Shield:\s*/, ""), when: al.at, color: al.type === "recovered" ? "var(--green)" : "var(--red)" });
-    for (const a of ASSETS) if (a.lastScanAt) items.push({ text: `Scan completed — ${a.name}`, when: a.lastScanAt, color: a.shield === "exposed" ? "var(--red)" : "var(--green)" });
+    for (const a of ASSETS) if (a.lastScanAt) items.push({ text: `Scan completed for ${a.name}`, when: a.lastScanAt, color: a.shield === "exposed" ? "var(--red)" : "var(--green)" });
     return items.sort((x, y) => new Date(y.when) - new Date(x.when));
   }
 
@@ -275,7 +278,7 @@
         <p>You are about to run a <b>${label}</b> against:</p>
         <div class="tgt">${esc(target)}</div>
         <p class="warn">${forensic
-          ? "Forensic examination can reveal personal and sensitive data. You may only do it with lawful authority — ownership, written permission, or a warrant or court order. Doing it without authority is a serious offence, and the responsibility is entirely yours."
+          ? "Forensic examination can reveal personal and sensitive data. You may only do it with lawful authority: ownership, written permission, or a warrant or court order. Doing it without authority is a serious offence, and the responsibility is entirely yours."
           : `Only test systems you own or have explicit permission to test. Running a test against a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.`}</p>
         ${forensic ? `
         <label class="al">Authorization reference</label>
@@ -308,10 +311,10 @@
     const body = `
       <h2>Verify you own ${host}</h2>
       <div class="sub">Lucent Shield will not scan a website until you prove you control it. Choose one method, then press Verify.</div>
-      <div class="vmethod"><div class="vt">Option 1 — host a file</div>
+      <div class="vmethod"><div class="vt">Option 1: host a file</div>
         <p>Put a file at this exact address, containing the token below:</p>
         <div class="tgt">https://${host}/.well-known/lucent-verify.txt</div></div>
-      <div class="vmethod"><div class="vt">Option 2 — add a DNS record</div>
+      <div class="vmethod"><div class="vt">Option 2: add a DNS record</div>
         <p>Add this TXT record to <b>${host}</b>:</p>
         <div class="tgt">lucent-verify=${tok}</div></div>
       <div class="vmethod"><div class="vt">Your token</div><div class="tgt">${tok}</div></div>
@@ -328,7 +331,7 @@
           await refresh();
           setTimeout(() => { d.close(); const fresh = ASSETS.find((a) => a.id === asset.id) || { ...asset, verified: true }; if (onVerified) onVerified(fresh); else renderView(); }, 800);
         } else {
-          st.textContent = "Not found yet. DNS or the file can take a few minutes — try again shortly."; st.className = "vstatus bad";
+          st.textContent = "Not found yet. DNS or the file can take a few minutes, so try again shortly."; st.className = "vstatus bad";
         }
       } catch (ex) { st.textContent = ex.message; st.className = "vstatus bad"; }
     };
@@ -378,7 +381,7 @@
     }
     if (bad > 0) {
       setHero("exposed", "Attention needed"); setStatus("EXPOSED");
-      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open — ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to close them.`);
+      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open: ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to close them.`);
       showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host, findings));
     } else if (findings.length) {
       setHero("secure", "Protected"); setStatus("SECURED");
@@ -447,7 +450,7 @@
     const unverified = a.kind === "web" && !a.verified;
     return `<div class="card s-${a.shield}" data-id="${a.id}">
       <span class="kind">${KIND_LABEL[a.kind] || a.kind}</span>
-      <button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Monitoring on — click to pause" : "Paused — click to watch"}">${a.monitor ? "● watching" : "○ paused"}</button>
+      <button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Monitoring on. Click to pause" : "Paused. Click to watch"}">${a.monitor ? "● watching" : "○ paused"}</button>
       <button class="del" data-act="del" title="Remove">✕</button>
       ${lockSvg("padlock")}
       <div class="name">${esc(a.name)}</div>

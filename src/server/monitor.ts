@@ -64,11 +64,11 @@ async function scanOne(asset: Asset): Promise<void> {
   if (beforeShield === "new") return;
 
   if (worse) {
-    const msg = `🔓 Lucent Shield: "${updated.name}" is now ${updated.shield.toUpperCase()} — ${updated.counts.critical} critical, ${updated.counts.high} high, ${updated.counts.medium} medium.`;
+    const msg = `🔓 Lucent Shield: "${updated.name}" is now ${updated.shield.toUpperCase()}: ${updated.counts.critical} critical, ${updated.counts.high} high, ${updated.counts.medium} medium.`;
     store.addAlert({ assetId: updated.id, assetName: updated.name, type: afterHighCrit > beforeHighCrit && RANK[updated.shield] === RANK[beforeShield] ? "new-issues" : "worsened", message: msg });
     await dispatch(msg, { asset: updated.name, shield: updated.shield });
   } else if (recovered) {
-    const msg = `🔒 Lucent Shield: "${updated.name}" is protected again — all critical and high issues cleared.`;
+    const msg = `🔒 Lucent Shield: "${updated.name}" is protected again. All critical and high issues are cleared.`;
     store.addAlert({ assetId: updated.id, assetName: updated.name, type: "recovered", message: msg });
     await dispatch(msg, { asset: updated.name, shield: updated.shield });
   }

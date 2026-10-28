@@ -61,7 +61,7 @@ export function toHtml(result: ScanResult): string {
 
   const cards =
     findings.length === 0
-      ? `<p class="clean">No issues found by this scan. A clean automated scan is good news, but it is not a guarantee — keep monitoring on.</p>`
+      ? `<p class="clean">No issues found by this scan. A clean automated scan is good news, but it is not a guarantee, so keep monitoring on.</p>`
       : findings
           .map(
             (f) => `<div class="card">
@@ -77,7 +77,7 @@ export function toHtml(result: ScanResult): string {
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lucent Shield report — ${esc(result.target)}</title>
+<title>Lucent Shield report: ${esc(result.target)}</title>
 <style>
   :root { --bg:#0b1220; --panel:#131c33; --line:#26314f; --text:#e7ecf7; --muted:#9aa6c9; }
   * { box-sizing:border-box; }

@@ -11,6 +11,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolveTxt } from "node:dns/promises";
 import { store, publicUser, type User } from "./store.ts";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, isAdminUser, scanOptionsFor } from "./access.ts";
+import { newTotpSecret, otpauthUri, verifyCode, newRecoveryCodes, hashRecovery } from "./totp.ts";
 import { startMonitor } from "./monitor.ts";
 import { runScan, isGitUrl, VERSION, type AssetKind } from "../engine.ts";
 import { classify } from "../catalog.ts";
@@ -29,6 +30,28 @@ const MIN_PASSWORD = 10;
 // Sessions: token -> account and expiry (ms). Expired tokens are dropped on use.
 const SESSION_MS = 24 * 60 * 60 * 1000;
 const sessions = new Map<string, { userId: string; expiry: number }>();
+
+// After a correct password, accounts with two-step login get a short-lived
+// ticket and must send a code with it. A ticket allows 5 wrong codes.
+const TICKET_MS = 5 * 60 * 1000;
+const tickets = new Map<string, { userId: string; expiry: number; tries: number }>();
+function newTicket(userId: string): string {
+  for (const [k, t] of tickets) if (t.expiry < Date.now()) tickets.delete(k);
+  const t = randomBytes(24).toString("hex");
+  tickets.set(t, { userId, expiry: Date.now() + TICKET_MS, tries: 0 });
+  return t;
+}
+
+// Changing two-step settings: at most 10 tries an hour per account.
+const twoStepTries = new Map<string, number[]>();
+function twoStepAllowed(userId: string): boolean {
+  const hour = Date.now() - 3_600_000;
+  const recent = (twoStepTries.get(userId) ?? []).filter((t) => t > hour);
+  if (recent.length >= 10) return false;
+  recent.push(Date.now());
+  twoStepTries.set(userId, recent);
+  return true;
+}
 
 // New accounts per address: at most 5 an hour, to stop mass sign-ups.
 const signups = new Map<string, number[]>();
@@ -257,7 +280,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   }
 
   // Login and sign-up come from our own page only (same check as below).
-  if ((path === "/api/login" || path === "/api/signup") && method === "POST" && !sameSite(req)) return json(res, 403, { error: "Blocked." });
+  if ((path === "/api/login" || path === "/api/signup" || path === "/api/login/code") && method === "POST" && !sameSite(req)) return json(res, 403, { error: "Blocked." });
 
   if (path === "/api/signup" && method === "POST") {
     const ip = clientIp(req);
@@ -297,7 +320,36 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       return json(res, 401, { error: "Wrong email or password." });
     }
     clearLoginFails(ip);
+    if (user.totp) return json(res, 200, { ok: true, needCode: true, ticket: newTicket(user.id) });
     return startSession(res, user, { ok: true, user: me(user) });
+  }
+
+  if (path === "/api/login/code" && method === "POST") {
+    const ip = clientIp(req);
+    const lockedFor = loginLockedFor(ip);
+    if (lockedFor > 0) return json(res, 429, { error: `Too many attempts. Try again in ${Math.ceil(lockedFor / 60)} min.` });
+    const body = await readBody(req);
+    const key = String(body.ticket ?? "");
+    const t = tickets.get(key);
+    if (!t || t.expiry < Date.now()) { tickets.delete(key); return json(res, 401, { error: "That took too long. Log in again." }); }
+    const u = store.user(t.userId);
+    const code = String(body.code ?? "").trim().slice(0, 20);
+    let ok = false, recovery = false;
+    if (u?.totp && /^\d{6}$/.test(code.replace(/\s/g, ""))) {
+      const step = verifyCode(u.totp.secret, code, u.totp.lastStep);
+      ok = step !== null && store.useTotpStep(u.id, step);
+    } else if (u?.totp && /^[A-Za-z2-7]{4}-?[A-Za-z2-7]{4}$/.test(code)) {
+      ok = recovery = store.useRecoveryCode(u.id, hashRecovery(code));
+    }
+    store.logLogin({ ip, email: u?.email ?? "", event: recovery ? "recovery" : "code", ok });
+    if (!ok || !u) {
+      noteLoginFail(ip);
+      if (++t.tries >= 5) { tickets.delete(key); return json(res, 401, { error: "Too many wrong codes. Log in again." }); }
+      return json(res, 401, { error: "That code is not right. Use the newest code in your authenticator app, or a recovery code." });
+    }
+    tickets.delete(key);
+    clearLoginFails(ip);
+    return startSession(res, u, { ok: true, user: me(store.user(u.id)!) });
   }
 
   const user = currentUser(req);
@@ -336,6 +388,40 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     } catch {
       return json(res, 404, { error: "no icon" });
     }
+  }
+
+  // Two-step login for your own account. Turning it on or off needs your password.
+  if (path.startsWith("/api/account/2fa/") && method === "POST") {
+    if (!twoStepAllowed(user.id)) return json(res, 429, { error: "Too many attempts. Try again later." });
+    const body = await readBody(req);
+    const ip = clientIp(req);
+    if (path === "/api/account/2fa/start") {
+      if (user.totp) return json(res, 400, { error: "Two-step login is already on." });
+      if (!store.checkPassword(user.email, String(body.password ?? "").slice(0, 200))) return json(res, 400, { error: "Your password is not right." });
+      const secret = newTotpSecret();
+      store.setTotpPending(user.id, secret);
+      return json(res, 200, { ok: true, secret, uri: otpauthUri(secret, user.email) });
+    }
+    if (path === "/api/account/2fa/enable") {
+      const secret = store.totpPending(user.id);
+      if (!secret) return json(res, 400, { error: "The setup expired. Start again." });
+      const step = verifyCode(secret, String(body.code ?? ""), 0);
+      if (step === null) return json(res, 400, { error: "That code is not right. Check the time on your phone and use the newest code." });
+      const { codes, hashes } = newRecoveryCodes();
+      store.enableTotp(user.id, secret, hashes, step);
+      store.logLogin({ ip, email: user.email, event: "2fa-on", ok: true });
+      return json(res, 200, { ok: true, recoveryCodes: codes, user: me(store.user(user.id)!) });
+    }
+    if (path === "/api/account/2fa/disable") {
+      if (!user.totp) return json(res, 200, { ok: true, user: me(user) });
+      if (!store.checkPassword(user.email, String(body.password ?? "").slice(0, 200))) return json(res, 400, { error: "Your password is not right." });
+      const step = verifyCode(user.totp.secret, String(body.code ?? ""), user.totp.lastStep);
+      if (step === null || !store.useTotpStep(user.id, step)) return json(res, 400, { error: "That code is not right." });
+      store.disableTotp(user.id);
+      store.logLogin({ ip, email: user.email, event: "2fa-off", ok: true });
+      return json(res, 200, { ok: true, user: me(store.user(user.id)!) });
+    }
+    return json(res, 404, { error: "Unknown endpoint." });
   }
 
   // Admin only. Read-only views; nothing here changes stored data.

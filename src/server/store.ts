@@ -19,11 +19,16 @@ export interface User {
   lastLoginAt: string | null;
   /** Scans this account has run (shown on its dashboard). */
   scans: number;
+  /** Two-step login: the authenticator secret, the last code step used (no code
+   *  works twice), and hashes of the unused recovery codes. */
+  totp?: { secret: string; lastStep: number; recovery: string[]; enabledAt: string };
+  /** A secret being set up, not active until a code from it is confirmed. */
+  totpPending?: { secret: string; at: string };
 }
 
 /** What is safe to send to a browser about a user. */
-export type PublicUser = Omit<User, "salt" | "hash">;
-export const publicUser = ({ salt, hash, ...u }: User): PublicUser => u;
+export type PublicUser = Omit<User, "salt" | "hash" | "totp" | "totpPending"> & { twoStep: boolean; recoveryLeft: number };
+export const publicUser = ({ salt, hash, totp, totpPending, ...u }: User): PublicUser => ({ ...u, twoStep: !!totp, recoveryLeft: totp?.recovery.length ?? 0 });
 
 export interface Asset {
   id: string;
@@ -171,6 +176,45 @@ export const store = {
     const want = Buffer.from(u?.hash ?? "00".repeat(64), "hex");
     return u && got.length === want.length && timingSafeEqual(got, want) ? u : undefined;
   },
+  /** Applies a change to one account and saves it. */
+  updateUser(id: string, change: (u: User) => void): User | undefined {
+    const users = loadUsers();
+    const u = users.find((x) => x.id === id);
+    if (!u) return undefined;
+    change(u);
+    persistUsers(users);
+    return u;
+  },
+  setTotpPending(id: string, secret: string): void {
+    this.updateUser(id, (u) => { u.totpPending = { secret, at: new Date().toISOString() }; });
+  },
+  /** The pending secret, if it was started within the last 15 minutes. */
+  totpPending(id: string): string | undefined {
+    const p = this.user(id)?.totpPending;
+    return p && Date.now() - Date.parse(p.at) < 15 * 60_000 ? p.secret : undefined;
+  },
+  enableTotp(id: string, secret: string, recovery: string[], step: number): void {
+    this.updateUser(id, (u) => { u.totp = { secret, lastStep: step, recovery, enabledAt: new Date().toISOString() }; delete u.totpPending; });
+  },
+  disableTotp(id: string): void {
+    this.updateUser(id, (u) => { delete u.totp; delete u.totpPending; });
+  },
+  /** Records a code step as used; false if it (or a later one) was already used. */
+  useTotpStep(id: string, step: number): boolean {
+    let ok = false;
+    this.updateUser(id, (u) => { if (u.totp && step > u.totp.lastStep) { u.totp.lastStep = step; ok = true; } });
+    return ok;
+  },
+  /** Spends a recovery code; each one works once. */
+  useRecoveryCode(id: string, hash: string): boolean {
+    let ok = false;
+    this.updateUser(id, (u) => {
+      const i = u.totp?.recovery.indexOf(hash) ?? -1;
+      if (u.totp && i >= 0) { u.totp.recovery.splice(i, 1); ok = true; }
+    });
+    return ok;
+  },
+
   touchLogin(id: string): void {
     const users = loadUsers();
     const u = users.find((x) => x.id === id);
@@ -305,7 +349,7 @@ export const store = {
   },
 
   /** Sign-in history for the admin view. Never stores passwords. */
-  logLogin(entry: { ip: string; email: string; event: "login" | "signup"; ok: boolean }): void {
+  logLogin(entry: { ip: string; email: string; event: "login" | "signup" | "code" | "recovery" | "2fa-on" | "2fa-off"; ok: boolean }): void {
     const list = readJson<any[]>(LOGINS_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(LOGINS_FILE, list.slice(0, 500));

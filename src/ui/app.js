@@ -560,19 +560,94 @@
 
   function settingsView() {
     const watching = ASSETS.filter((a) => a.monitor).length;
+    const two = ME?.twoStep;
     return `<div class="set">
-      <div class="kv"><span class="k">Monitored assets</span><b>${watching} of ${ASSETS.length}</b></div>
-      <div class="kv"><span class="k">Auto re-scan</span><span>On the server schedule (<code>LUCENT_SCAN_INTERVAL_MIN</code>)</span></div>
-      <div class="kv"><span class="k">Alerts webhook</span><span>Set <code>LUCENT_ALERT_WEBHOOK</code> to also send to Slack/Discord</span></div>
       <div class="kv"><span class="k">Account</span><span>${esc(ME?.name || "")} · ${esc(ME?.email || "")}</span></div>
+      <div class="kv"><span class="k">Monitored assets</span><b>${watching} of ${ASSETS.length}</b></div>
+      ${ADMIN ? `<div class="kv"><span class="k">Auto re-scan</span><span>On the server schedule (<code>LUCENT_SCAN_INTERVAL_MIN</code>)</span></div>
+      <div class="kv"><span class="k">Alerts webhook</span><span>Set <code>LUCENT_ALERT_WEBHOOK</code> to also send to Slack/Discord</span></div>` : ""}
       <div class="kv"><span class="k">Signed in</span><button class="btn" id="logout" style="padding:7px 14px">Log out</button></div>
+    </div>
+    <div class="set twostep" id="twoStep">
+      <div class="ts-head"><div><h3>Two-step login</h3>
+        <p>${two ? `On. Logging in needs your password and a code from your authenticator app. ${ME.recoveryLeft} recovery ${ME.recoveryLeft === 1 ? "code" : "codes"} left.` : "Protect your account with a code from an authenticator app (Google Authenticator, Microsoft Authenticator, Authy) as well as your password."}</p></div>
+        <span class="tag ${two ? "secure" : "at_risk"}">${two ? "On" : "Off"}</span></div>
+      <div id="tsBody">${two
+        ? `<button class="btn ghost-btn" id="tsOffStart" type="button">Turn off</button>`
+        : `<button class="btn" id="tsStart" type="button">Turn on two-step login</button>`}</div>
     </div>`;
   }
-  function wireSettings() { const b = document.getElementById("logout"); if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); }; }
+
+  function qrSvg(text) {
+    const m = globalThis.lucentQR.matrix(text), n = m.length + 8;
+    let d = "";
+    m.forEach((row, r) => row.forEach((v, c) => { if (v) d += `M${c + 4} ${r + 4}h1v1h-1z`; }));
+    return `<svg class="qr" viewBox="0 0 ${n} ${n}" role="img" aria-label="QR code for your authenticator app"><rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  }
+
+  function wireSettings() {
+    const b = document.getElementById("logout");
+    if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); };
+    const body = document.getElementById("tsBody");
+    const err = () => `<div class="err" id="tsErr" role="alert"></div>`;
+    const fail = (ex) => { const e = document.getElementById("tsErr"); if (e) e.textContent = ex.message; };
+    const done = (u) => { ME = u; renderView(); };
+
+    const start = document.getElementById("tsStart");
+    if (start) start.onclick = () => {
+      body.innerHTML = `<form id="tsPw" class="tsform"><label class="lf">Confirm your password<input type="password" name="password" autocomplete="current-password" required></label>
+        <button class="btn" type="submit">Continue</button>${err()}</form>`;
+      const f = document.getElementById("tsPw"); f.password.focus();
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api("/api/account/2fa/start", { method: "POST", body: { password: f.password.value } });
+          body.innerHTML = `<div class="tssetup">
+            <div class="qrbox">${qrSvg(r.uri)}</div>
+            <div><ol class="steps"><li>Open your authenticator app and add an account.</li><li>Scan this QR code. If you can't scan, type this key instead:<div class="key"><code>${esc(r.secret.replace(/(.{4})/g, "$1 ").trim())}</code></div></li><li>Enter the 6-digit code the app shows.</li></ol>
+            <form id="tsCode" class="tsform"><label class="lf">Code from the app<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>
+            <button class="btn" type="submit">Turn on</button>${err()}</form></div></div>`;
+          const c = document.getElementById("tsCode"); c.code.focus();
+          c.onsubmit = async (e2) => {
+            e2.preventDefault();
+            try {
+              const x = await api("/api/account/2fa/enable", { method: "POST", body: { code: c.code.value } });
+              ME = x.user;
+              const head = document.querySelector("#twoStep .ts-head");
+              if (head) { head.querySelector(".tag").className = "tag secure"; head.querySelector(".tag").textContent = "On"; head.querySelector("p").textContent = "On. Logging in needs your password and a code from your authenticator app."; }
+              body.innerHTML = `<div class="recovery"><p><b>Two-step login is on.</b> Save these recovery codes somewhere safe, like a password manager or on paper. Each one works once, if you lose your phone. They will not be shown again.</p>
+                <div class="codes">${x.recoveryCodes.map((k) => `<code>${esc(k)}</code>`).join("")}</div>
+                <button class="btn" id="tsSaved" type="button">I have saved them</button></div>`;
+              document.getElementById("tsSaved").onclick = () => done(ME);
+            } catch (ex) { fail(ex); }
+          };
+        } catch (ex) { fail(ex); }
+      };
+    };
+
+    const off = document.getElementById("tsOffStart");
+    if (off) off.onclick = () => {
+      body.innerHTML = `<form id="tsOff" class="tsform"><p class="warn">Turning this off makes your account easier to break into.</p>
+        <label class="lf">Your password<input type="password" name="password" autocomplete="current-password" required></label>
+        <label class="lf">Code from your authenticator app<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>
+        <button class="btn danger-btn" type="submit">Turn off two-step login</button>${err()}</form>`;
+      const f = document.getElementById("tsOff"); f.password.focus();
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try { const x = await api("/api/account/2fa/disable", { method: "POST", body: { password: f.password.value, code: f.code.value } }); done(x.user); }
+        catch (ex) { fail(ex); }
+      };
+    };
+  }
 
   // ---------- admin ----------
   function dur(sec) { const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
   const yes = (on, good = true) => `<span class="tag ${on === good ? "secure" : "exposed"}">${on ? "On" : "Off"}</span>`;
+
+  function EVENT_LABEL(l) {
+    const t = { signup: ["Account created", "Sign-up refused"], login: ["Password accepted", "Refused"], code: ["Logged in with code", "Wrong code"], recovery: ["Used a recovery code", "Wrong recovery code"], "2fa-on": ["Two-step turned on", ""], "2fa-off": ["Two-step turned off", ""] }[l.event] || ["Logged in", "Refused"];
+    return l.ok ? t[0] : t[1];
+  }
 
   async function loadAdmin() {
     const el = document.getElementById("view");
@@ -584,6 +659,7 @@
     const stat = (cls, icon, label, n, sub, subcls = "") => `<div class="stat"><div class="si ${cls}">${ic(icon, 20)}</div><div><div class="l">${label}</div><div class="n">${n}</div><div class="sub ${subcls}">${sub}</div></div></div>`;
     const open = t.severity.critical + t.severity.high;
     const warnings = [];
+    if (!ME?.twoStep) warnings.push("Your admin account has no two-step login. Turn it on in Settings: it is the strongest protection against a stolen password.");
     if (!st.signupsOpen) warnings.push("New sign-ups are closed (LUCENT_SIGNUPS=closed). Only existing accounts can log in.");
     if (!st.httpsCookies) warnings.push("The login cookie is not marked Secure. Set TRUST_PROXY=1 when serving over HTTPS.");
     if (st.internalTargetsAllowed) warnings.push("Internal network targets are allowed (LUCENT_ALLOW_INTERNAL=1). Turn this off in production.");
@@ -608,14 +684,14 @@
         <div class="pnl">
           <div class="ph"><h3>${ic("key", 16)} Sign-ins</h3></div>
           ${d.logins.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Email</th><th>From</th><th>Result</th></tr></thead><tbody>
-            ${d.logins.slice(0, 40).map((l) => `<tr><td>${new Date(l.at).toLocaleString()}</td><td>${esc(l.email || "")}</td><td class="mono">${esc(l.ip)}</td><td><span class="tag ${l.ok ? "secure" : "exposed"}">${l.event === "signup" ? (l.ok ? "Account created" : "Sign-up refused") : (l.ok ? "Logged in" : "Refused")}</span></td></tr>`).join("")}
+            ${d.logins.slice(0, 40).map((l) => `<tr><td>${new Date(l.at).toLocaleString()}</td><td>${esc(l.email || "")}</td><td class="mono">${esc(l.ip)}</td><td><span class="tag ${l.ok ? "secure" : "exposed"}">${EVENT_LABEL(l)}</span></td></tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">No sign-ins recorded yet.</div>`}
         </div>
       </div>
       <div class="pnl adm-block">
         <div class="ph"><h3>${ic("key", 16)} Accounts</h3></div>
-        ${d.users.length ? `<div class="adm-table"><table><thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last login</th><th>Assets</th><th>Scans</th></tr></thead><tbody>
-          ${d.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.admin ? ` <span class="tag secure">Admin</span>` : ""}</td><td>${esc(u.email)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.lastLoginAt ? timeAgo(u.lastLoginAt) : "never"}</td><td>${u.assets}</td><td>${u.scans || 0}</td></tr>`).join("")}
+        ${d.users.length ? `<div class="adm-table"><table><thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last login</th><th>Two-step</th><th>Assets</th><th>Scans</th></tr></thead><tbody>
+          ${d.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.admin ? ` <span class="tag secure">Admin</span>` : ""}</td><td>${esc(u.email)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.lastLoginAt ? timeAgo(u.lastLoginAt) : "never"}</td><td>${u.twoStep ? "On" : "Off"}</td><td>${u.assets}</td><td>${u.scans || 0}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty">No accounts yet.</div>`}
       </div>
       <div class="pnl adm-block">
@@ -693,8 +769,39 @@
       }
       if (!body.email || !body.password) return void (err.textContent = "Enter your email and password.");
       const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
-      try { await api(signup ? "/api/signup" : "/api/login", { method: "POST", body }); boot(); }
+      try {
+        const r = await api(signup ? "/api/signup" : "/api/login", { method: "POST", body });
+        if (r.needCode) codeView(r.ticket, signupsOpen); else boot();
+      }
       catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    };
+  }
+
+  // Second step of logging in, for accounts with two-step login.
+  function codeView(ticket, signupsOpen) {
+    root.innerHTML = `<div class="login"><div class="box">
+      <div class="shieldwrap"><div class="glow"></div><div class="ring"></div><img src="/logo.png" alt="Lucent Shield"></div>
+      <div class="pill"><span class="d"></span>Two-step login</div>
+      <h1>Enter your code</h1>
+      <p>Open your authenticator app and enter the 6-digit code for Lucent Shield.</p>
+      <form id="codeForm" novalidate>
+        <label class="lf">Code<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="9" required></label>
+        <button class="btn" type="submit">Log in</button><div class="err" id="loginErr" role="alert"></div>
+      </form>
+      <div class="switch">Lost your phone? Enter one of your recovery codes instead.</div>
+      <div class="switch"><button type="button" id="codeBack">Back to log in</button></div>
+    </div></div>`;
+    const f = document.getElementById("codeForm"); f.code.focus();
+    document.getElementById("codeBack").onclick = () => loginView(signupsOpen);
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("loginErr"); err.textContent = "";
+      const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
+      try { await api("/api/login/code", { method: "POST", body: { ticket, code: f.code.value.trim() } }); boot(); }
+      catch (ex) {
+        err.textContent = ex.message; btn.disabled = false; f.code.select();
+        if (/log in again/i.test(ex.message)) setTimeout(() => loginView(signupsOpen), 1800);
+      }
     };
   }
 

@@ -86,6 +86,8 @@ LUCENT_ADMIN_EMAIL="you@yourcompany.com" LUCENT_ADMIN_PASSWORD="a-long-admin-pas
 
 Nobody else can create an account with the admin email, because it needs the admin password. The admin account also gets the Admin tab.
 
+Any account can turn on **two-step login** in Settings: scan the QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, Authy), and from then on logging in needs a 6-digit code as well as the password. Ten one-time recovery codes cover a lost phone. Turn it on for the admin account first.
+
 ## Deploy
 
 A Dockerfile is ready for Bash Cloud or any Docker host.

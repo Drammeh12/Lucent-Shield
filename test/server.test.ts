@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { codeFor, stepAt } from "../src/server/totp.ts";
 
 const ADMIN_EMAIL = "owner@example.com";
 const ADMIN_PASSWORD = "Admin-Staple-Lantern-4";
@@ -234,6 +235,47 @@ test("the admin view is for the admin only", async () => {
   for (const secret of [ADMIN_PASSWORD, ALICE.password, '"hash"', '"salt"']) assert.equal(text.includes(secret), false, secret);
   const dl = await fetch(base + "/api/admin/audit.json", { headers: { cookie } });
   assert.match(dl.headers.get("content-disposition") ?? "", /attachment/);
+});
+
+test("two-step login: set up with an app code, then every login needs a code", async () => {
+  const h = { cookie: alice };
+  assert.equal((await call("/api/account/2fa/start", { method: "POST", body: { password: "wrong-password!" }, headers: h })).status, 400);
+  const st = await call("/api/account/2fa/start", { method: "POST", body: { password: ALICE.password }, headers: h });
+  assert.equal(st.status, 200);
+  assert.match(st.data.uri, /^otpauth:\/\/totp\/Lucent%20Shield:/);
+  const secret = st.data.secret;
+  assert.equal((await call("/api/account/2fa/enable", { method: "POST", body: { code: "000000" }, headers: h })).status, 400);
+  const on = await call("/api/account/2fa/enable", { method: "POST", body: { code: codeFor(secret, stepAt()) }, headers: h });
+  assert.equal(on.status, 200);
+  assert.equal(on.data.recoveryCodes.length, 10);
+  assert.equal(on.data.user.twoStep, true);
+
+  // The password alone is no longer enough: no session cookie, just a ticket.
+  const pw = await fetch(base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: ALICE.email, password: ALICE.password }) });
+  const step1 = await pw.json();
+  assert.equal(step1.needCode, true);
+  assert.equal(pw.headers.get("set-cookie"), null);
+  const code = codeFor(secret, stepAt() + 1);
+  const ok = await call("/api/login/code", { method: "POST", body: { ticket: step1.ticket, code }, auth: false });
+  assert.equal(ok.status, 200);
+  assert.equal((await call("/api/login/code", { method: "POST", body: { ticket: step1.ticket, code }, auth: false })).status, 401, "a ticket works once");
+
+  // The same code can never be used twice.
+  const again = (await call("/api/login", { method: "POST", body: { email: ALICE.email, password: ALICE.password }, auth: false })).data.ticket;
+  assert.equal((await call("/api/login/code", { method: "POST", body: { ticket: again, code }, auth: false })).status, 401);
+
+  // A recovery code works once.
+  const rc = on.data.recoveryCodes[0];
+  const t2 = (await call("/api/login", { method: "POST", body: { email: ALICE.email, password: ALICE.password }, auth: false })).data.ticket;
+  assert.equal((await call("/api/login/code", { method: "POST", body: { ticket: t2, code: rc }, auth: false })).status, 200);
+  const t3 = (await call("/api/login", { method: "POST", body: { email: ALICE.email, password: ALICE.password }, auth: false })).data.ticket;
+  assert.equal((await call("/api/login/code", { method: "POST", body: { ticket: t3, code: rc }, auth: false })).status, 401);
+
+  // Turning it off needs a valid code too; the secret is never shown to the admin.
+  assert.equal((await call("/api/account/2fa/disable", { method: "POST", body: { password: ALICE.password, code: "123456" }, headers: h })).status, 400);
+  const o = await call("/api/admin/overview");
+  assert.ok(!JSON.stringify(o.data).includes(secret));
+  assert.ok(o.data.users.some((u: any) => u.email === ALICE.email && u.twoStep));
 });
 
 test("too many new accounts from one address are refused", async () => {

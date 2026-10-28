@@ -9,7 +9,7 @@ import { scanWeb } from "./scanners/web.ts";
 import { scanArtifact } from "./scanners/forensics.ts";
 import { countBySeverity, type Finding, type ScanResult } from "./types.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export type AssetKind = "repo" | "web" | "artifact";
 export type Shield = "secure" | "at_risk" | "exposed" | "scanning" | "new";

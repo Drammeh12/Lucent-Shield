@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { store } from "./store.ts";
+import { startMonitor } from "./monitor.ts";
 import { runScan, VERSION, type AssetKind } from "../engine.ts";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
@@ -117,8 +118,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     if (origin && host && new URL(origin).host !== host) return json(res, 403, { error: "Blocked." });
   }
 
+  if (path === "/api/alerts" && method === "GET") {
+    return json(res, 200, { alerts: store.listAlerts(), unread: store.unreadAlerts() });
+  }
+  if (path === "/api/alerts/read-all" && method === "POST") {
+    store.markAlertsRead();
+    return json(res, 200, { ok: true });
+  }
+
   if (path === "/api/assets" && method === "GET") {
-    return json(res, 200, { assets: store.list().map(({ findings, ...a }) => a) });
+    return json(res, 200, { assets: store.list().map(({ findings, ...a }) => a), unread: store.unreadAlerts(), totalScans: store.scanCount() });
   }
 
   if (path === "/api/assets" && method === "POST") {
@@ -135,7 +144,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 200, { asset: rest });
   }
 
-  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan)?$/);
+  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor)?$/);
   if (idMatch) {
     const id = idMatch[1];
     const asset = store.get(id);
@@ -145,6 +154,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       if (asset.kind === "web" && !asset.authorized) return json(res, 403, { error: "Not authorised to scan this site." });
       const result = await runScan(asset.kind, asset.target);
       const updated = store.saveScan(id, result);
+      return json(res, 200, { asset: updated });
+    }
+    if (idMatch[2] === "/monitor" && method === "POST") {
+      const body = await readBody(req);
+      const updated = store.setMonitor(id, body.on !== false);
       return json(res, 200, { asset: updated });
     }
     if (method === "GET") return json(res, 200, { asset });
@@ -172,4 +186,5 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Lucent Shield v${VERSION} running on http://localhost:${PORT}`);
   if (!PASSWORD) console.log("  (no LUCENT_PASSWORD set — open mode, for local use only)");
+  startMonitor();
 });

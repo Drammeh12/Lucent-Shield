@@ -15,6 +15,8 @@ export interface Asset {
   target: string;
   /** The operator confirmed they own or are authorised to test this. */
   authorized: boolean;
+  /** Re-scan this asset automatically on the monitor schedule. */
+  monitor: boolean;
   createdAt: string;
   lastScanAt: string | null;
   shield: Shield;
@@ -22,8 +24,30 @@ export interface Asset {
   findings: Finding[];
 }
 
+export type AlertType = "worsened" | "recovered" | "new-issues";
+
+export interface Alert {
+  id: string;
+  assetId: string;
+  assetName: string;
+  type: AlertType;
+  message: string;
+  at: string;
+  read: boolean;
+}
+
 const DATA_DIR = resolve(process.env.LUCENT_DATA_DIR ?? "data");
 const FILE = join(DATA_DIR, "assets.json");
+const ALERTS_FILE = join(DATA_DIR, "alerts.json");
+const META_FILE = join(DATA_DIR, "meta.json");
+
+function loadMeta(): { scans: number } {
+  try { return JSON.parse(readFileSync(META_FILE, "utf8")); } catch { return { scans: 0 }; }
+}
+function persistMeta(meta: { scans: number }): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(META_FILE, JSON.stringify(meta));
+}
 
 function load(): Asset[] {
   try {
@@ -36,6 +60,20 @@ function load(): Asset[] {
 function persist(assets: Asset[]): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(FILE, JSON.stringify(assets, null, 2));
+}
+
+function loadAlerts(): Alert[] {
+  try {
+    return JSON.parse(readFileSync(ALERTS_FILE, "utf8")) as Alert[];
+  } catch {
+    return [];
+  }
+}
+
+function persistAlerts(alerts: Alert[]): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  // Keep the most recent 200.
+  writeFileSync(ALERTS_FILE, JSON.stringify(alerts.slice(0, 200), null, 2));
 }
 
 export const store = {
@@ -55,6 +93,7 @@ export const store = {
       kind: input.kind,
       target: input.target,
       authorized: input.authorized,
+      monitor: true,
       createdAt: new Date().toISOString(),
       lastScanAt: null,
       shield: "new",
@@ -83,6 +122,42 @@ export const store = {
     asset.counts = countBySeverity(result.findings);
     asset.shield = shieldFor(result.findings);
     persist(assets);
+    const meta = loadMeta();
+    meta.scans++;
+    persistMeta(meta);
     return asset;
+  },
+
+  scanCount(): number {
+    return loadMeta().scans;
+  },
+
+  setMonitor(id: string, on: boolean): Asset | undefined {
+    const assets = load();
+    const asset = assets.find((a) => a.id === id);
+    if (!asset) return undefined;
+    asset.monitor = on;
+    persist(assets);
+    return asset;
+  },
+
+  addAlert(input: Omit<Alert, "id" | "at" | "read">): Alert {
+    const alerts = loadAlerts();
+    const alert: Alert = { id: randomUUID(), at: new Date().toISOString(), read: false, ...input };
+    alerts.unshift(alert);
+    persistAlerts(alerts);
+    return alert;
+  },
+
+  listAlerts(): Alert[] {
+    return loadAlerts();
+  },
+
+  unreadAlerts(): number {
+    return loadAlerts().filter((a) => !a.read).length;
+  },
+
+  markAlertsRead(): void {
+    persistAlerts(loadAlerts().map((a) => ({ ...a, read: true })));
   },
 };

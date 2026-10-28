@@ -38,6 +38,10 @@ Every scan produces a **Security Assessment Report** in the structure clients an
 
 In the dashboard, open an asset's report and choose **Full assessment report (PDF)**, then **Save as PDF**. HTML, Markdown and JSON downloads are there too. Lucent Shield never exploits what it finds, so the report is an assessment, not a penetration test.
 
+## Guided video
+
+A narrated, animated walkthrough explains every part of the app: creating an account, the dashboard, choosing a scan, giving permission, proving you own a website, the live scan, the fixes and the report, Protect and what the padlock colours mean, alerts and activity, the Assets page, and two-step login. Open it with **Watch how Lucent Shield works** on the log in and sign-up pages, or **How it works** at the top of the dashboard. It also opens once by itself after a new account is created. Captions are always shown; the voice can be switched off.
+
 ## Only test what you own
 
 Lucent Shield is strict about who may test what.

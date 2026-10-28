@@ -505,3 +505,6 @@ a { color: var(--green); text-decoration: none; }
 .hero .herolock .statusword { bottom: -6px; }
 .hero .herolock .lockname { bottom: -26px; }
 .hero .herolock { margin-bottom: 26px; }
+.login .watchrow { margin-top: 14px; display: flex; justify-content: center; }
+.topbar .watch-btn { margin-right: 4px; }
+@media (max-width: 640px) { .topbar .watch-btn { padding: 7px; font-size: 0; gap: 0; } }

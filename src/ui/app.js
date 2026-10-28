@@ -54,7 +54,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web";
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web", SHOW_TOUR = false;
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -82,6 +82,7 @@
         <div class="topbar">
           <div class="crumbs">Scan · Detect · <b>Secure</b></div>
           <div class="sp"></div>
+          ${watchBtn("watchTop")}
           <button class="iconbtn" id="bell">${ic("bell")}<span class="badge" id="bellBadge" hidden>0</span></button>
           <div class="user"><span class="av">${esc(initials(ME?.name || ME?.email))}</span><b>${esc(ME?.name || "")}</b>${ADMIN ? `<span class="tag secure">Admin</span>` : ""}</div>
         </div>
@@ -95,10 +96,15 @@
     </div>`;
     root.querySelector(".nav").onclick = (e) => { const a = e.target.closest("a"); if (a) { VIEW = a.dataset.view; shell(); renderView(); } };
     document.getElementById("bell").onclick = openAlerts;
+    document.getElementById("watchTop").onclick = watchGuide;
     setBell(UNREAD);
   }
 
   function initials(n) { const p = String(n || "?").trim().split(/[\s@.]+/).filter(Boolean); return ((p[0]?.[0] || "?") + (p[1]?.[0] || "")).toUpperCase(); }
+
+  /** The guided video. Opens wherever a "How it works" button is pressed. */
+  function watchGuide() { if (window.LucentTour) window.LucentTour.open(); }
+  const watchBtn = (id, label = "How it works") => `<button type="button" class="watch-btn" id="${id}"><span class="pl">▶</span>${label}</button>`;
 
   function setBell(n) { UNREAD = n; const b = document.getElementById("bellBadge"); if (b) { b.hidden = !n; b.textContent = n > 99 ? "99+" : n; } }
 
@@ -666,6 +672,7 @@
       <div class="kv"><span class="k">Monitored assets</span><b>${watching} of ${ASSETS.length}</b></div>
       ${ADMIN ? `<div class="kv"><span class="k">Auto re-scan</span><span>On the server schedule (<code>LUCENT_SCAN_INTERVAL_MIN</code>)</span></div>
       <div class="kv"><span class="k">Alerts webhook</span><span>Set <code>LUCENT_ALERT_WEBHOOK</code> to also send to Slack/Discord</span></div>` : ""}
+      <div class="kv"><span class="k">Guided video</span>${watchBtn("watchSet", "Watch how it works")}</div>
       <div class="kv"><span class="k">Signed in</span><button class="btn" id="logout" style="padding:7px 14px">Log out</button></div>
     </div>
     <div class="set twostep" id="twoStep">
@@ -688,6 +695,7 @@
   function wireSettings() {
     const b = document.getElementById("logout");
     if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); };
+    const w = document.getElementById("watchSet"); if (w) w.onclick = watchGuide;
     const body = document.getElementById("tsBody");
     const err = () => `<div class="err" id="tsErr" role="alert"></div>`;
     const fail = (ex) => { const e = document.getElementById("tsErr"); if (e) e.textContent = ex.message; };
@@ -862,9 +870,11 @@
       </form>
       ${signup ? `<div class="switch">Already have an account? <button type="button" id="authSwitch">Log in</button></div>`
         : signupsOpen ? `<div class="switch">New to Lucent Shield? <button type="button" id="authSwitch">Create an account</button></div>` : ""}
+      <div class="watchrow">${watchBtn("watchLogin", "Watch how Lucent Shield works")}</div>
       <div class="foot"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></div>
       <div class="cap">Created by Bash Lucent · © 2026</div>
     </div></div>`;
+    document.getElementById("watchLogin").onclick = watchGuide;
     const f = document.getElementById("authForm");
     (f.name || f.email).focus();
     const sw = document.getElementById("authSwitch");
@@ -883,6 +893,7 @@
       const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
       try {
         const r = await api(signup ? "/api/signup" : "/api/login", { method: "POST", body });
+        if (signup) SHOW_TOUR = true; // a new account gets the guided video once
         if (r.needCode) codeView(r.ticket, signupsOpen); else boot();
       }
       catch (ex) { err.textContent = ex.message; btn.disabled = false; }
@@ -920,6 +931,7 @@
   async function start() {
     await refresh();
     shell(); renderView();
+    if (SHOW_TOUR) { SHOW_TOUR = false; setTimeout(watchGuide, 600); }
     if (polling) clearInterval(polling);
     polling = setInterval(poll, 20000);
   }

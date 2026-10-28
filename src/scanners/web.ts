@@ -4,9 +4,24 @@
 // HTTPS, and whether sensitive files are exposed. It never fuzzes, brute-forces,
 // exploits, or sends anything that could change or damage the target.
 
+import { lookup } from "node:dns/promises";
 import type { Finding, Severity } from "../types.ts";
 
 const TIMEOUT_MS = 9000;
+
+// Cloud-metadata SSRF guard. Even though scanning is operator-only, a server on
+// a cloud host must never be tricked into fetching its own instance metadata
+// (169.254.169.254 / metadata.google.internal), which can leak credentials.
+// Set LUCENT_ALLOW_INTERNAL=1 to disable (e.g. to scan internal/LAN assets).
+async function isBlockedHost(host: string): Promise<boolean> {
+  if (process.env.LUCENT_ALLOW_INTERNAL === "1") return false;
+  if (/(^|\.)metadata\.google\.internal$/i.test(host)) return true;
+  let ip = host;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    try { ip = (await lookup(host)).address; } catch { return false; }
+  }
+  return /^169\.254\./.test(ip); // link-local, incl. cloud metadata
+}
 
 async function get(url: string): Promise<Response | null> {
   const ctrl = new AbortController();
@@ -96,6 +111,15 @@ export async function scanWeb(rawUrl: string): Promise<Finding[]> {
     url = new URL(rawUrl.includes("://") ? rawUrl : `https://${rawUrl}`);
   } catch {
     return [{ rule: "web.bad-url", severity: "info", category: "web", title: "Invalid URL", detail: `Could not read the address "${rawUrl}".`, remediation: "Enter a full address, e.g. https://yoursite.com" }];
+  }
+
+  if (await isBlockedHost(url.hostname)) {
+    return [{
+      rule: "web.blocked-internal", severity: "info", category: "web", location: url.href,
+      title: "Address blocked (internal/metadata)",
+      detail: "This address points at a cloud metadata or link-local endpoint, which Lucent Shield will not fetch, to avoid leaking server credentials.",
+      remediation: "Scan a public address you own. To allow internal targets on a trusted host, set LUCENT_ALLOW_INTERNAL=1.",
+    }];
   }
 
   // HTTPS check.

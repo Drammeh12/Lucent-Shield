@@ -15,7 +15,30 @@ const PORT = Number(process.env.PORT) || 4600;
 const PASSWORD = (process.env.LUCENT_PASSWORD ?? "").trim();
 const HTTPS = process.env.LUCENT_PUBLIC_URL?.startsWith("https://") || process.env.TRUST_PROXY === "1";
 
-const sessions = new Set<string>();
+// Sessions: token -> expiry (ms). Expired tokens are dropped on use.
+const SESSION_MS = 24 * 60 * 60 * 1000;
+const sessions = new Map<string, number>();
+
+// Login throttle: per-client-IP failed-attempt tracking, to blunt brute force.
+const LOGIN_MAX_FAILS = 8;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const loginFails = new Map<string, { fails: number; until: number }>();
+
+function clientIp(req: IncomingMessage): string {
+  return req.socket.remoteAddress ?? "unknown";
+}
+function loginLockedFor(ip: string): number {
+  const rec = loginFails.get(ip);
+  if (rec && rec.until > Date.now()) return Math.ceil((rec.until - Date.now()) / 1000);
+  return 0;
+}
+function noteLoginFail(ip: string): void {
+  const rec = loginFails.get(ip) ?? { fails: 0, until: 0 };
+  rec.fails++;
+  if (rec.fails >= LOGIN_MAX_FAILS) { rec.until = Date.now() + LOGIN_LOCK_MS; rec.fails = 0; }
+  loginFails.set(ip, rec);
+}
+function clearLoginFails(ip: string): void { loginFails.delete(ip); }
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -46,7 +69,11 @@ function cookies(req: IncomingMessage): Record<string, string> {
 function authed(req: IncomingMessage): boolean {
   if (!PASSWORD) return true; // open in local/dev mode
   const token = cookies(req)["ls"];
-  return !!token && sessions.has(token);
+  if (!token) return false;
+  const expiry = sessions.get(token);
+  if (!expiry) return false;
+  if (expiry < Date.now()) { sessions.delete(token); return false; } // expired
+  return true;
 }
 
 function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -106,10 +133,17 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   }
 
   if (path === "/api/login" && method === "POST") {
+    const ip = clientIp(req);
+    const lockedFor = loginLockedFor(ip);
+    if (lockedFor > 0) return json(res, 429, { error: `Too many attempts. Try again in ${Math.ceil(lockedFor / 60)} min.` });
     const body = await readBody(req);
-    if (!passwordOk(String(body.password ?? ""))) return json(res, 401, { error: "Wrong password." });
+    if (!passwordOk(String(body.password ?? ""))) {
+      noteLoginFail(ip);
+      return json(res, 401, { error: "Wrong password." });
+    }
+    clearLoginFails(ip);
     const token = randomBytes(24).toString("hex");
-    sessions.add(token);
+    sessions.set(token, Date.now() + SESSION_MS);
     return json(res, 200, { ok: true }, { "Set-Cookie": `ls=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${HTTPS ? "; Secure" : ""}` });
   }
 
@@ -121,11 +155,19 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 200, { ok: true }, { "Set-Cookie": "ls=; Path=/; Max-Age=0" });
   }
 
-  // State-changing requests must come from our own page.
+  // State-changing requests must come from our own page (CSRF defence, on top
+  // of the SameSite=Lax session cookie). Check Origin, and fall back to Referer.
   if (method !== "GET") {
-    const origin = req.headers.origin;
     const host = req.headers.host;
-    if (origin && host && new URL(origin).host !== host) return json(res, 403, { error: "Blocked." });
+    const origin = req.headers.origin;
+    const referer = req.headers.referer;
+    const sameHost = (u?: string) => { if (!u) return undefined; try { return new URL(u).host === host; } catch { return false; } };
+    const okOrigin = sameHost(origin);
+    const okReferer = sameHost(referer);
+    // If an Origin or Referer is present, it must match our host.
+    if (okOrigin === false || (okOrigin === undefined && okReferer === false)) {
+      return json(res, 403, { error: "Blocked." });
+    }
   }
 
   // Favicon proxy: fetches the target site's icon server-side so the browser can

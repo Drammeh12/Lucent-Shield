@@ -16,7 +16,7 @@ import { countBySeverity, type Finding, type ScanResult } from "./types.ts";
 
 const pexec = promisify(execFile);
 
-export const VERSION = "0.9.0";
+export const VERSION = "0.10.0";
 
 export type AssetKind = "repo" | "web" | "artifact";
 export type Shield = "secure" | "at_risk" | "exposed" | "scanning" | "new";

@@ -143,6 +143,20 @@ test("a damaged data file is kept aside, never silently wiped", async () => {
   assert.ok(readdirSync(dataDir).some((f) => f.startsWith("alerts.json.corrupt-")));
 });
 
+test("the assessment report carries the scan's authorization", async () => {
+  const list = (await call("/api/assets")).data.assets.filter((a: any) => a.lastScanAt);
+  assert.ok(list.length, "a scanned asset exists");
+  const id = list[0].id;
+  const view = await fetch(`${base}/api/assets/${id}/report?view=1`, { headers: { cookie } });
+  assert.equal(view.status, 200);
+  assert.match(view.headers.get("content-disposition") ?? "", /^inline/);
+  const html = await view.text();
+  assert.ok(html.includes("Security Assessment Report") && html.includes("Explicit authorization was given"));
+  const dl = await fetch(`${base}/api/assets/${id}/report?format=md`, { headers: { cookie } });
+  assert.match(dl.headers.get("content-disposition") ?? "", /^attachment/);
+  assert.equal((await fetch(`${base}/api/assets/${id}/report`)).status, 401, "needs a login");
+});
+
 test("the admin view is for the admin only", async () => {
   // A normal dashboard session is refused.
   assert.equal((await call("/api/admin/overview")).status, 403);

@@ -13,7 +13,7 @@ import { store } from "./store.ts";
 import { startMonitor } from "./monitor.ts";
 import { runScan, VERSION, type AssetKind } from "../engine.ts";
 import { classify } from "../catalog.ts";
-import { toHtml, toMarkdown, toJson } from "../report.ts";
+import { toHtml, toMarkdown, toJson, type ReportContext } from "../report.ts";
 import { sortFindings, type Finding, type ScanResult } from "../types.ts";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
@@ -378,19 +378,28 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     // Downloadable report of the last scan: ?format=html|md|json
     if (idMatch[2] === "/report" && method === "GET") {
       if (!asset.lastScanAt) return json(res, 404, { error: "Scan this asset first." });
-      const format = new URL(req.url ?? "/", "http://x").searchParams.get("format") ?? "html";
+      const q = new URL(req.url ?? "/", "http://x").searchParams;
+      const format = q.get("format") ?? "html";
+      const view = format === "html" && q.get("view") === "1";
       const result: ScanResult = { tool: "Lucent Shield", version: VERSION, target: asset.target, mode: asset.kind === "web" ? "web" : "repo",
         startedAt: asset.lastScanAt, finishedAt: asset.lastScanAt, filesScanned: asset.filesScanned ?? 0, findings: asset.findings };
+      // The authorization recorded for the most recent scan of this asset goes into the report.
+      const auth = store.listAuthorizations().find((a) => a.assetId === asset.id && a.at <= asset.lastScanAt!) ?? store.listAuthorizations().find((a) => a.assetId === asset.id);
+      const ctx: ReportContext = {
+        assetName: asset.name, kind: asset.kind, verified: asset.verified, view,
+        authorization: auth ? { at: auth.at, ip: auth.ip, reference: auth.reference } : null,
+      };
       const slug = asset.name.replace(/[^A-Za-z0-9.-]+/g, "-").slice(0, 60) || "asset";
       const day = asset.lastScanAt.slice(0, 10);
-      const [body, type, ext] = format === "json" ? [toJson(result), "application/json; charset=utf-8", "json"]
-        : format === "md" ? [toMarkdown(result), "text/markdown; charset=utf-8", "md"]
-        : [toHtml(result), "text/html; charset=utf-8", "html"];
+      const [body, type, ext] = format === "json" ? [toJson(result, ctx), "application/json; charset=utf-8", "json"]
+        : format === "md" ? [toMarkdown(result, ctx), "text/markdown; charset=utf-8", "md"]
+        : [toHtml(result, ctx), "text/html; charset=utf-8", "html"];
+      const file = `lucent-shield-assessment-${slug}-${day}.${ext}`;
       res.writeHead(200, {
         "Content-Type": type,
-        "Content-Disposition": `attachment; filename="lucent-shield-${slug}-${day}.${ext}"`,
+        "Content-Disposition": `${view ? "inline" : "attachment"}; filename="${file}"`,
         "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; img-src data:${view ? "; script-src 'self'" : ""}; frame-ancestors 'none'`,
         "Cache-Control": "no-store",
       });
       return res.end(body);

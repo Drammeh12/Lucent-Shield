@@ -16,7 +16,7 @@
 // (only dependency names/versions go to the OSV vulnerability database).
 
 import { writeFileSync, existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { scanRepoFolder, VERSION } from "./engine.ts";
 import { toJson, toMarkdown, toHtml } from "./report.ts";
 import { SEVERITY_RANK, SEVERITY_ORDER, countBySeverity, type ScanResult, type Severity } from "./types.ts";
@@ -70,7 +70,8 @@ async function main() {
     findings,
   };
 
-  const output = format === "json" ? toJson(result) : format === "html" ? toHtml(result) : toMarkdown(result);
+  const ctx = { kind: "repo" as const, assetName: basename(target), runBy: "Run from the command line by the code owner, who confirmed they own the code or are authorised to test it" };
+  const output = format === "json" ? toJson(result, ctx) : format === "html" ? toHtml(result, ctx) : toMarkdown(result, ctx);
 
   if (outFile) {
     writeFileSync(outFile, output);

@@ -522,7 +522,10 @@
     const f = asset.findings || [];
     const body = f.length ? f.map((x) => `<div class="finding"><div class="fh"><span class="sev ${x.severity}">${x.severity}</span><span class="ft">${esc(x.title)}</span></div>${x.location ? `<div class="loc">${esc(x.location)}${x.line ? ":" + x.line : ""}</div>` : ""}${x.evidence ? `<pre>${esc(x.evidence)}</pre>` : ""}<div class="detail">${esc(x.detail)}</div><div class="fix"><b>How to fix:</b> ${esc(x.remediation)}</div></div>`).join("")
       : `<div class="clean-note">No issues in the last scan. The padlock is green. Keep scanning after changes.</div>`;
-    drawer(`<h2>${esc(asset.name)}</h2><div class="sub">${esc(asset.target)} · scanned ${asset.lastScanAt ? new Date(asset.lastScanAt).toLocaleString() : "never"}</div>${body}`);
+    const base = `/api/assets/${asset.id}/report`;
+    const dl = asset.lastScanAt ? `<div class="repbar"><a class="btn" href="${base}?view=1" target="_blank" rel="noopener">${ic("reports", 16)} Full assessment report (PDF)</a>
+      <a class="ghost" href="${base}?format=html">HTML</a><a class="ghost" href="${base}?format=md">Markdown</a><a class="ghost" href="${base}?format=json">JSON</a></div>` : "";
+    drawer(`<h2>${esc(asset.name)}</h2><div class="sub">${esc(asset.target)} · scanned ${asset.lastScanAt ? new Date(asset.lastScanAt).toLocaleString() : "never"}</div>${dl}${body}`);
   }
 
   async function openAlerts() {

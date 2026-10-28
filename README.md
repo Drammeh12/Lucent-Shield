@@ -23,6 +23,21 @@ Lucent Shield watches the code and websites you own, tells you in plain words wh
 
 **Continuous monitoring.** Keep watching your assets on a schedule and get an alert when protection slips or recovers. Alerts show in the dashboard, and can also go to Slack or Discord.
 
+## Reports
+
+Every scan produces a **Security Assessment Report** in the structure clients and auditors expect:
+
+1. Executive summary with an overall risk rating
+2. Scope and authorization, including the recorded permission for the scan and proof of domain ownership
+3. Methodology and rules of engagement
+4. Findings summary, each with an ID, severity, risk score, CWE number and OWASP Top 10 category
+5. Detailed findings with location, evidence, description and recommendation
+6. Remediation plan with a fix-by deadline for each severity
+7. Limitations
+8. Reviewer notes and sign-off, for a security professional to add anything confirmed by hand
+
+In the dashboard, open an asset's report and choose **Full assessment report (PDF)**, then **Save as PDF**. HTML, Markdown and JSON downloads are there too. Lucent Shield never exploits what it finds, so the report is an assessment, not a penetration test.
+
 ## Only test what you own
 
 Lucent Shield is strict about who may test what.
@@ -45,7 +60,7 @@ Needs Node.js 22.13 or newer. The only dependency is `tsx`, so there is nothing 
 # scan a repository you own and read the report in your terminal
 npm run scan -- /path/to/your/project
 
-# write a shareable HTML report
+# write the assessment report as a print-ready HTML page (save it as PDF from a browser)
 npm run scan -- /path/to/your/project --format html --out report.html
 
 # only show high and critical issues, and fail CI if any are found

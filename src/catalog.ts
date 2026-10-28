@@ -17,8 +17,8 @@ const OWASP = {
 };
 
 const MAP: [RegExp, string, string, string][] = [
-  [/sql-injection/, "CWE-89", "SQL Injection", OWASP.A03],
   [/nosql-injection/, "CWE-943", "Improper Neutralization in Data Query Logic", OWASP.A03],
+  [/sql-injection/, "CWE-89", "SQL Injection", OWASP.A03],
   [/command-injection|subprocess-shell|os-system|spawn-shell|gha\.script-injection/, "CWE-78", "OS Command Injection", OWASP.A03],
   [/file-inclusion/, "CWE-98", "PHP Remote File Inclusion", OWASP.A03],
   [/ssti/, "CWE-1336", "Template Injection", OWASP.A03],

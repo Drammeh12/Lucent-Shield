@@ -19,7 +19,7 @@ Lucent Shield watches the code and websites you own, tells you in plain words wh
 
 **Forensics.** Inspect a file or an artifact, capture its fingerprint, and surface anything that looks out of place.
 
-**Live dashboard.** A web app with a big padlock that beeps green and closed when every asset is protected, and red and open the moment one is exposed. Add a site and watch the scan run live, with the real findings streaming in, then press Secure to work through them one by one.
+**Live dashboard.** A web app with a big padlock that beeps green and closed when every asset is protected, and red and open the moment one is exposed. Add a site and watch the scan run live, with the real findings streaming in, then press Secure to get the exact fix for each one and turn on continuous monitoring.
 
 **Continuous monitoring.** Keep watching your assets on a schedule and get an alert when protection slips or recovers. Alerts show in the dashboard, and can also go to Slack or Discord.
 

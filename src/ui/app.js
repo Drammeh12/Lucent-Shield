@@ -148,7 +148,7 @@
         </div>
         <div class="seq" id="heroSeq" hidden>
           <div class="meter" id="heroMeterWrap" hidden><i id="meterFill"></i></div>
-          <div class="mlabel" id="meterLabel" hidden><b id="meterPct">0%</b> protection coverage</div>
+          <div class="mlabel" id="meterLabel" hidden><b id="meterPct">0%</b> of fixes ready</div>
           <div class="logstream" id="logstream"></div>
           <button class="secbtn" id="secBtn" hidden></button>
         </div>
@@ -243,20 +243,22 @@
   // Severity -> log colour. Critical/high read as alarms, medium as a warning.
   const sevClass = (s) => (s === "critical" || s === "high" ? "bad" : s === "medium" ? "warn" : "");
   // Turn a real finding into a short "closing this down" action line for the Secure log.
+  // The fix to apply for a finding, in plain words. Lucent Shield prepares
+  // these; it does not change the customer's server (the Shield proxy will).
   function fixPhrase(f) {
     const t = (f.title || "").toLowerCase(), r = (f.rule || "").toLowerCase();
-    if (t.includes("hsts") || t.includes("strict-transport")) return ["Enabling HSTS", "enabled"];
-    if (t.includes("content-security-policy")) return ["Adding Content-Security-Policy", "enabled"];
-    if (t.includes("x-content-type")) return ["Setting X-Content-Type-Options: nosniff", "enabled"];
-    if (t.includes("clickjacking") || t.includes("x-frame")) return ["Blocking clickjacking (X-Frame-Options)", "enabled"];
-    if (t.includes("referrer-policy")) return ["Setting Referrer-Policy", "enabled"];
-    if (t.includes("plain http") || t.includes("http")) return ["Forcing HTTPS", "closed"];
-    if (t.includes("cookie")) return ["Hardening cookie flags (Secure, HttpOnly)", "closed"];
-    if (t.includes("x-powered-by") || t.includes("server version") || t.includes("technology disclosed")) return ["Hiding server and stack version", "closed"];
+    if (t.includes("hsts") || t.includes("strict-transport")) return "Turn on HSTS";
+    if (t.includes("content-security-policy")) return "Add a Content-Security-Policy";
+    if (t.includes("x-content-type")) return "Set X-Content-Type-Options: nosniff";
+    if (t.includes("clickjacking") || t.includes("x-frame")) return "Block clickjacking with X-Frame-Options";
+    if (t.includes("referrer-policy")) return "Set a Referrer-Policy";
+    if (t.includes("plain http")) return "Serve the site over HTTPS only";
+    if (t.includes("cookie")) return "Add Secure and HttpOnly to cookies";
+    if (t.includes("x-powered-by") || t.includes("server version") || t.includes("technology disclosed")) return "Hide the server and stack version";
     if (t.includes(".env") || t.includes(".git") || t.includes("backup") || t.includes("config") || t.includes(".ds_store") || t.includes("exposed") || r.includes("exposed")) {
-      const m = f.title.match(/\(([^)]+)\)|^[^:]+/); return [`Blocking public access to ${f.title.replace(/ exposed.*/i, "").replace(/^Environment file/, ".env")}`, "closed"];
+      return `Block public access to ${f.title.replace(/ exposed.*/i, "").replace(/^Environment file/, ".env")}`;
     }
-    return [`Hardening: ${f.title}`, "closed"];
+    return `Fix: ${f.title}`;
   }
   function showSecBtn(label, fn) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn"; b.textContent = label; b.onclick = fn; }
   function secBtnDone(label) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn done"; b.textContent = label; b.onclick = null; }
@@ -381,7 +383,7 @@
     }
     if (bad > 0) {
       setHero("exposed", "Attention needed"); setStatus("EXPOSED");
-      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open: ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to close them.`);
+      logLine("bad", `${findings.length} issue${findings.length !== 1 ? "s" : ""} open: ${a.counts.critical} critical, ${a.counts.high} high. Press Secure to get the fixes.`);
       showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host, findings));
     } else if (findings.length) {
       setHero("secure", "Protected"); setStatus("SECURED");
@@ -398,35 +400,35 @@
 
   async function secureFlow(assetId, host, findings) {
     SEQ = true; hideSecBtn();
-    setHero("securing", "Closing the gaps…"); setStatus("SECURING");
+    setHero("securing", "Preparing your fixes…"); setStatus("SECURING");
     showMeter(); setMeter(6);
     api(`/api/assets/${assetId}/monitor`, { method: "POST", body: { on: true } }).catch(() => {});
-    logLine("run", "Engaging Lucent Shield");
+    logLine("ok", "Continuous monitoring turned on");
     await wait(480); setMeter(14);
     const fixes = (findings || []).filter((f) => f.severity !== "info").slice(0, 12);
     if (fixes.length) {
       const span = 78 / fixes.length;
       for (let i = 0; i < fixes.length; i++) {
-        const [action, verb] = fixPhrase(fixes[i]);
-        logLine("", `${action}…`); await wait(430);
-        logLine("ok", `${action} → ${verb}`); setMeter(14 + span * (i + 1)); await wait(260);
+        const fix = fixPhrase(fixes[i]);
+        logLine("", `${fix}…`); await wait(430);
+        logLine("ok", `${fix}: fix ready`); setMeter(14 + span * (i + 1)); await wait(260);
       }
     } else {
-      for (const [pct, t] of [[40, "Applying hardening baseline"], [70, "Enabling continuous monitoring"], [90, "Arming threat alerts"]]) { logLine("", t); setMeter(pct); await wait(520); }
+      for (const [pct, t] of [[45, "Checking the security baseline"], [90, "Arming alerts for any change"]]) { logLine("", t); setMeter(pct); await wait(520); }
     }
-    logLine("run", "Re-scanning to verify…");
+    logLine("run", "Re-scanning to see what is fixed…");
     const res = await api(`/api/assets/${assetId}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
     const a = res?.asset; if (a) { ASSETS = ASSETS.map((x) => (x.id === assetId ? { ...x, ...a } : x)); TOTAL_SCANS++; }
     await wait(420);
     const bad = a ? a.counts.critical + a.counts.high : 1;
     if (bad === 0) {
       setMeter(100); setHero("secure", "Protected"); setStatus("SECURED");
-      logLine("ok", "Protection active. Monitoring engaged.");
+      logLine("ok", "Clean. Lucent Shield keeps watching it.");
       secBtnDone("Protected"); finishSeqSoon(3400);
     } else {
-      setMeter(Math.max(20, 100 - bad * 18)); setHero("exposed", "Still needs your action"); setStatus("EXPOSED");
-      logLine("bad", `${bad} critical/high issue${bad !== 1 ? "s" : ""} remain. Open the report for the fix.`);
-      showSecBtn("Open the report", () => openReport(assetId));
+      setMeter(100); setHero("exposed", "Your fixes are ready"); setStatus("EXPOSED");
+      logLine("bad", `${bad} critical/high issue${bad !== 1 ? "s" : ""} still open. Apply the fixes in your report, then scan again.`);
+      showSecBtn("Open the fixes", () => openReport(assetId));
     }
   }
 

@@ -36,6 +36,8 @@
     code: `<path d="M8 7l-4 4 4 4M14 7l4 4-4 4"/>`,
     mask: `<path d="M3 7c4-2 12-2 16 0 0 6-3 9-8 9S3 13 3 7z"/><circle cx="8" cy="10" r="1.2"/><circle cx="14" cy="10" r="1.2"/>`,
     finger: `<path d="M7 11a4 4 0 0 1 8 0v3M9 11v4M13 11v5M5 12v2M17 12v2"/>`,
+    db: `<ellipse cx="11" cy="5" rx="7" ry="2.6"/><path d="M4 5v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V5"/><path d="M4 11c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/>`,
+    server: `<rect x="3" y="4" width="16" height="6" rx="1.5"/><rect x="3" y="12" width="16" height="6" rx="1.5"/><path d="M6.5 7h.01M6.5 15h.01"/>`,
   };
   const ic = (n, w = 18) => `<svg width="${w}" height="${w}" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[n] || ""}</svg>`;
 
@@ -150,6 +152,17 @@
       </div>
       <div class="herolock ${st}" id="herolock">
         <div class="halo"></div><div class="rings"></div>
+        <div class="orbit">
+          <svg class="wires" viewBox="-140 -140 280 280" aria-hidden="true">
+            <circle class="track" cx="0" cy="0" r="120"/>
+            <line class="wire" x1="0" y1="0" x2="0" y2="-120"/><line class="wire" x1="0" y1="0" x2="120" y2="0"/>
+            <line class="wire" x1="0" y1="0" x2="0" y2="120"/><line class="wire" x1="0" y1="0" x2="-120" y2="0"/>
+          </svg>
+          <span class="node nT"><span class="lbl">${ic("code", 18)}</span></span>
+          <span class="node nR"><span class="lbl">API</span></span>
+          <span class="node nB"><span class="lbl">${ic("db", 18)}</span></span>
+          <span class="node nL"><span class="lbl">${ic("server", 18)}</span></span>
+        </div>
         ${flowIcon(focus)}
         <div class="scanline"></div>
         ${lockSvg("biglock")}
@@ -339,7 +352,7 @@
         <div class="field"><label>Kind</label><select name="kind">
           <option value="repo">Code repo (white box)</option><option value="web">Website (black box)</option><option value="artifact">Artifact (forensics)</option>
         </select></div>
-        <div class="field"><label>Target</label><input name="target" placeholder="/path/to/repo  or  https://yoursite.com" required maxlength="2000"></div>
+        <div class="field"><label>Target</label><input name="target" placeholder="github.com/you/repo  ·  /path/to/repo  ·  https://yoursite.com" required maxlength="2000"></div>
         <button class="btn" type="submit">Add & protect</button>
         <label class="auth" id="authRow" hidden><input type="checkbox" name="authorized"> I own this site or am authorised to test it.</label>
         <div class="err" id="addErr"></div>

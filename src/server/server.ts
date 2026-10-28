@@ -22,6 +22,16 @@ const TYPES: Record<string, string> = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+};
+
+// Public pages reachable without logging in.
+const PAGES: Record<string, string> = {
+  "/about": "about.html",
+  "/terms": "terms.html",
+  "/privacy": "privacy.html",
 };
 
 function cookies(req: IncomingMessage): Record<string, string> {
@@ -118,6 +128,30 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     if (origin && host && new URL(origin).host !== host) return json(res, 403, { error: "Blocked." });
   }
 
+  // Favicon proxy: fetches the target site's icon server-side so the browser can
+  // show it (CSP only allows same-origin images). Cached by the browser for a day.
+  if (path === "/api/favicon" && method === "GET") {
+    const u = new URL(req.url ?? "/", "http://x").searchParams.get("u") ?? "";
+    let host = "";
+    try { host = new URL(/^https?:\/\//.test(u) ? u : "https://" + u).hostname; } catch {}
+    if (!host) return json(res, 400, { error: "bad host" });
+    try {
+      const r = await fetch(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!r.ok) throw new Error("no icon");
+      const buf = Buffer.from(await r.arrayBuffer());
+      res.writeHead(200, {
+        "Content-Type": r.headers.get("content-type") ?? "image/png",
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+      });
+      return res.end(buf);
+    } catch {
+      return json(res, 404, { error: "no icon" });
+    }
+  }
+
   if (path === "/api/alerts" && method === "GET") {
     return json(res, 200, { alerts: store.listAlerts(), unread: store.unreadAlerts() });
   }
@@ -176,6 +210,7 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     const path = url.pathname;
     if (path.startsWith("/api/")) return await api(req, res, path);
+    if (PAGES[path]) return serveStatic(res, "/" + PAGES[path]);
     return serveStatic(res, path);
   } catch (err) {
     json(res, 500, { error: "Server error." });

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · Lucent Shield</title>
+<meta name="description" content="How Lucent Shield, a Bash Lucent product, handles your data.">
+<style>
+  :root{--bg:#060a12;--panel:#0d1424;--line:#192441;--text:#e7edf8;--muted:#8293b4;--blue:#3b82f6;--cyan:#22d3ee}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:radial-gradient(1100px 650px at 75% -8%,#0c1a2e 0,transparent 55%),var(--bg);color:var(--text);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:720px;margin:0 auto;padding:40px 22px 70px}
+  .top{display:flex;align-items:center;gap:13px;margin-bottom:30px}
+  .top img{width:42px;height:42px;border-radius:11px}
+  .top .n b{font-size:18px;display:block;line-height:1.1}
+  .top .n span{font-size:11px;letter-spacing:3px;color:var(--muted)}
+  h1{font-size:30px;letter-spacing:-.4px;margin:0 0 4px}
+  .upd{color:var(--muted);font-size:13px;margin:0 0 26px}
+  h2{font-size:18px;margin:28px 0 8px;color:#fff}
+  p{color:#c3cee4;margin:0 0 14px}
+  a{color:var(--cyan)}
+  footer{border-top:1px solid var(--line);margin-top:46px;padding-top:22px;color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+  footer a{color:var(--muted);text-decoration:none}
+  footer a:hover{color:var(--text)}
+  footer .sp{flex:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><img src="/logo.png" alt="Lucent Shield"><div class="n"><b>Lucent Shield</b><span>SECURITY BEYOND BOUNDARIES</span></div></div>
+  <h1>Privacy</h1>
+  <p class="upd">Last updated 28 October 2026</p>
+
+  <p>Lucent Shield is built to protect you, so it collects as little as it can. This page explains what it keeps and why.</p>
+
+  <h2>What we store</h2>
+  <p>We store the assets you choose to protect, their scan results, and the alerts those scans produce. This lives on your own Lucent Shield instance so you can come back and see the history. We do not sell it, and we do not share it with anyone.</p>
+
+  <h2>What we do not store</h2>
+  <p>We do not ask for personal details to use the tool. Access is protected by a single password that you set yourself, and that password is never shown back to you or written into your data.</p>
+
+  <h2>Scanning other sites</h2>
+  <p>When you scan a website, Lucent Shield makes ordinary, read-only requests to it, the same kind a normal visitor's browser makes. To show a site's icon in the dashboard, it fetches that icon through a public icon service. It never sends your scan results anywhere outside your instance.</p>
+
+  <h2>Alerts to other tools</h2>
+  <p>If you choose to connect an alerts webhook, such as Slack or Discord, Lucent Shield will send a short alert message there when a watched asset changes. That is the only time information leaves your instance, and only because you asked it to.</p>
+
+  <h2>Cookies</h2>
+  <p>Lucent Shield uses one essential cookie to keep you logged in after you enter your password. There is no tracking and no advertising.</p>
+
+  <h2>Contact</h2>
+  <p>For anything about your data, reach Bash Lucent through the contact details on our main site.</p>
+
+  <footer>
+    <span>Created by Bash Lucent</span>
+    <span class="sp"></span>
+    <a href="/about">About</a>
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <span>© 2026 Bash Lucent</span>
+  </footer>
+</div>
+</body>
+</html>

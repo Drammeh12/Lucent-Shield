@@ -47,16 +47,29 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false;
+
+  // The target icon that flows through the padlock. Web assets show the site's
+  // real favicon (fetched server-side); repos and artifacts show a glyph.
+  function flowIcon(asset) {
+    const glyph = asset?.kind === "repo" ? ic("code", 18) : asset?.kind === "artifact" ? ic("finger", 18) : ic("globe", 18);
+    const img = asset?.kind === "web" ? `<img class="fav" src="/api/favicon?u=${encodeURIComponent(asset.target)}" alt="" onerror="this.remove()">` : "";
+    return `<div class="flow"><span class="glyph">${glyph}</span>${img}</div>`;
+  }
+  // Which asset the big padlock represents right now.
+  function focusAsset() {
+    return ASSETS.find((a) => a.shield === "scanning") || ASSETS.find((a) => a.shield === "exposed")
+      || ASSETS.find((a) => a.kind === "web") || ASSETS[0] || null;
+  }
 
   // ---------- shell ----------
   function shell() {
     const nav = [["dashboard", "home", "Dashboard"], ["assets", "assets", "Assets"], ["scans", "scans", "Scans"], ["reports", "reports", "Reports"], ["settings", "gear", "Settings"]];
     root.innerHTML = `<div class="app">
       <aside class="side">
-        <div class="logo"><img src="/logo.svg" alt=""><div class="wm"><b>LUCENT</b><span>SHIELD</span></div></div>
+        <div class="logo"><img src="/logo.png" alt=""><div class="wm"><b>LUCENT</b><span>SHIELD</span></div></div>
         <nav class="nav">${nav.map(([v, i, l]) => `<a data-view="${v}" class="${VIEW === v ? "on" : ""}"><span class="ic">${ic(i)}</span>${l}</a>`).join("")}</nav>
-        <div class="foot"><img src="/logo.svg" alt="">Built for a safer digital world.</div>
+        <div class="foot"><img src="/logo.png" alt="">Built for a safer digital world.</div>
       </aside>
       <main class="main">
         <div class="topbar">
@@ -66,6 +79,11 @@
           <div class="user"><span class="av">BL</span><b>Bash Lucent</b></div>
         </div>
         <div class="content" id="view"></div>
+        <div class="content"><div class="appfoot">
+          <span>Created by Bash Lucent</span><span class="sp"></span>
+          <a href="/about" target="_blank">About</a><a href="/terms" target="_blank">Terms</a><a href="/privacy" target="_blank">Privacy</a>
+          <span>© 2026 Bash Lucent</span>
+        </div></div>
       </main>
     </div>`;
     root.querySelector(".nav").onclick = (e) => { const a = e.target.closest("a"); if (a) { VIEW = a.dataset.view; shell(); renderView(); } };
@@ -112,22 +130,29 @@
       scanning: "Lucent Shield is actively scanning for secrets, vulnerabilities and exposed files.",
       new: "Protect a code repo, a website you own, or inspect a forensic artifact.",
     };
-    const checks = ["Checking headers & TLS", "Scanning for vulnerabilities", "Detecting leaked secrets", "Monitoring for threats", "Finalizing report"];
-    return `<div class="hero ${st}">
-      <div>
+    const focus = focusAsset();
+    return `<div class="hero ${st}" id="hero">
+      <div class="heroL">
         <span class="live"><span class="dot"></span>Live protection</span>
-        <h1>${words[st]}</h1>
-        <p class="lead">${lead[st]}</p>
-        <div class="scanbar">
+        <h1 id="heroTitle">${words[st]}</h1>
+        <p class="lead" id="heroLead">${lead[st]}</p>
+        <div class="scanbar" id="heroScanbar">
           <div class="in">${ic("globe", 16)}<input id="quickUrl" placeholder="https://yoursite.com" maxlength="2000"></div>
           <button class="go" id="quickGo">Protect</button>
         </div>
-        <div class="checks">${checks.map((c, i) => `<div class="chk ${i < 3 ? "done" : ""}"><span class="d">✓</span>${c}</div>`).join("")}</div>
+        <div class="seq" id="heroSeq" hidden>
+          <div class="meter" id="heroMeterWrap" hidden><i id="meterFill"></i></div>
+          <div class="mlabel" id="meterLabel" hidden><b id="meterPct">0%</b> protection coverage</div>
+          <div class="logstream" id="logstream"></div>
+          <button class="secbtn" id="secBtn" hidden></button>
+        </div>
       </div>
-      <div class="herolock ${st}">
+      <div class="herolock ${st}" id="herolock">
         <div class="halo"></div><div class="rings"></div>
+        ${flowIcon(focus)}
+        <div class="scanline"></div>
         ${lockSvg("biglock")}
-        <div class="statusword">${st === "secure" ? "SECURED" : st === "exposed" ? "EXPOSED" : st === "scanning" ? "SCANNING" : ""}</div>
+        <div class="statusword" id="statusword">${st === "secure" ? "SECURED" : st === "exposed" ? "EXPOSED" : st === "scanning" ? "SCANNING" : ""}</div>
       </div>
     </div>`;
   }
@@ -159,8 +184,8 @@
 
   function wireDashboard() {
     const go = document.getElementById("quickGo"), url = document.getElementById("quickUrl");
-    if (go) go.onclick = () => quickProtect(url.value.trim());
-    if (url) url.onkeydown = (e) => { if (e.key === "Enter") quickProtect(url.value.trim()); };
+    if (go) go.onclick = () => runScanSequence(url.value.trim());
+    if (url) url.onkeydown = (e) => { if (e.key === "Enter") runScanSequence(url.value.trim()); };
     document.getElementById("view").onclick = (e) => {
       const kind = e.target.closest("[data-kind]")?.dataset.kind;
       const view = e.target.closest("[data-view]")?.dataset.view;
@@ -172,14 +197,92 @@
     };
   }
 
-  async function quickProtect(target) {
+  // ---------- live scan + secure sequence (the hero show) ----------
+  const heroEl = (id) => document.getElementById(id);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  function setHero(state, title) {
+    const h = heroEl("hero"), l = heroEl("herolock");
+    if (h) h.className = "hero " + state;
+    if (l) l.className = "herolock " + state;
+    if (title) { const t = heroEl("heroTitle"); if (t) t.textContent = title; }
+  }
+  function setStatus(w) { const s = heroEl("statusword"); if (s) s.textContent = w; }
+  function setFocusIcon(asset) { const f = heroEl("herolock")?.querySelector(".flow"); if (f) f.outerHTML = flowIcon(asset); }
+  function enterSeq() {
+    ["heroLead", "heroScanbar"].forEach((id) => { const e = heroEl(id); if (e) e.hidden = true; });
+    const s = heroEl("heroSeq"); if (s) s.hidden = false;
+    const ls = heroEl("logstream"); if (ls) ls.innerHTML = "";
+    heroEl("heroMeterWrap").hidden = true; heroEl("meterLabel").hidden = true; hideSecBtn();
+  }
+  function showMeter() { heroEl("heroMeterWrap").hidden = false; heroEl("meterLabel").hidden = false; }
+  function setMeter(pct) { const f = heroEl("meterFill"); if (f) f.style.width = pct + "%"; const p = heroEl("meterPct"); if (p) p.textContent = Math.round(pct) + "%"; }
+  function logLine(cls, html) {
+    const ls = heroEl("logstream"); if (!ls) return;
+    const mark = cls === "ok" ? "✓" : cls === "bad" ? "✕" : cls === "run" ? "›" : "·";
+    const d = document.createElement("div"); d.className = "logline";
+    d.innerHTML = `<span class="${cls || "run"}">${mark}</span> ${html}`;
+    ls.appendChild(d); while (ls.children.length > 6) ls.removeChild(ls.firstChild);
+  }
+  function showSecBtn(label, fn) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn"; b.textContent = label; b.onclick = fn; }
+  function secBtnDone(label) { const b = heroEl("secBtn"); if (!b) return; b.hidden = false; b.className = "secbtn done"; b.textContent = label; b.onclick = null; }
+  function hideSecBtn() { const b = heroEl("secBtn"); if (b) b.hidden = true; }
+  function finishSeqSoon(ms = 3200) { setTimeout(async () => { SEQ = false; await refresh(); if (VIEW === "dashboard") renderView(); }, ms); }
+
+  async function runScanSequence(target) {
     if (!target) return;
     if (!confirm(`Confirm you own or are authorised to test:\n${target}`)) return;
+    let asset;
     try {
-      const { asset } = await api("/api/assets", { method: "POST", body: { name: target.replace(/^https?:\/\//, ""), kind: "web", target, authorized: true } });
-      await refresh(); renderView();
-      scanAsset(asset.id, true);
-    } catch (ex) { alert(ex.message); }
+      const r = await api("/api/assets", { method: "POST", body: { name: target.replace(/^https?:\/\//, ""), kind: "web", target, authorized: true } });
+      asset = r.asset;
+    } catch (ex) { alert(ex.message); return; }
+    const host = asset.name;
+    SEQ = true;
+    ASSETS = [{ ...asset }, ...ASSETS];
+    renderView();
+    enterSeq(); setFocusIcon(asset); setHero("scanning", `Scanning ${esc(host)}…`); setStatus("SCANNING");
+    const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST" }).catch(() => null);
+    const lines = [["run", `Resolving host <b>${esc(host)}</b>`], ["run", "Opening secure connection"], ["", "Reading response headers"], ["", "Checking TLS and HSTS"], ["", "Inspecting cookies"], ["", "Probing for exposed files"], ["", "Evaluating content security policy"]];
+    for (const [c, t] of lines) { logLine(c, t); await wait(460); }
+    logLine("run", "Scoring exposure…");
+    const res = await scanP; await wait(420);
+    const a = res?.asset;
+    if (!a) { logLine("bad", "Scan could not complete. Check the address and try again."); setStatus("ERROR"); finishSeqSoon(); return; }
+    ASSETS = ASSETS.map((x) => (x.id === asset.id ? { ...x, ...a } : x)); TOTAL_SCANS++;
+    const bad = a.counts.critical + a.counts.high;
+    if (bad > 0) {
+      setHero("exposed", "Attention needed"); setStatus("EXPOSED");
+      logLine("bad", `Found ${a.counts.total} issue${a.counts.total !== 1 ? "s" : ""} — ${a.counts.critical} critical, ${a.counts.high} high`);
+      showSecBtn(`Secure ${esc(host)}`, () => secureFlow(a.id, host));
+    } else {
+      logLine("ok", "No critical or high issues found");
+      setHero("secure", "Protected"); setStatus("SECURED");
+      logLine("ok", `${esc(host)} is locked and protected`);
+      finishSeqSoon();
+    }
+  }
+
+  async function secureFlow(assetId, host) {
+    SEQ = true; hideSecBtn();
+    setHero("securing", "Engaging protection…"); setStatus("SECURING");
+    showMeter(); setMeter(8);
+    api(`/api/assets/${assetId}/monitor`, { method: "POST", body: { on: true } }).catch(() => {});
+    const steps = [[18, "Engaging Lucent Shield"], [34, "Applying hardening baseline"], [50, "Reviewing response headers"], [66, "Enabling continuous monitoring"], [80, "Arming threat alerts"], [90, "Capturing secure snapshot"]];
+    for (const [pct, t] of steps) { logLine("", t); setMeter(pct); await wait(560); }
+    logLine("run", "Re-scanning to verify…");
+    const res = await api(`/api/assets/${assetId}/scan`, { method: "POST" }).catch(() => null);
+    const a = res?.asset; if (a) { ASSETS = ASSETS.map((x) => (x.id === assetId ? { ...x, ...a } : x)); TOTAL_SCANS++; }
+    await wait(420);
+    const bad = a ? a.counts.critical + a.counts.high : 1;
+    if (bad === 0) {
+      setMeter(100); setHero("secure", "Protected"); setStatus("SECURED");
+      logLine("ok", "Protection active. Monitoring engaged.");
+      secBtnDone("Protected"); finishSeqSoon(3400);
+    } else {
+      setMeter(Math.max(20, 100 - bad * 18)); setHero("exposed", "Still needs your action"); setStatus("EXPOSED");
+      logLine("bad", `${bad} critical/high issue${bad !== 1 ? "s" : ""} remain. Open the report for the fix.`);
+      showSecBtn("Open the report", () => openReport(assetId));
+    }
   }
 
   // ---------- assets view ----------
@@ -303,7 +406,7 @@
   async function refreshCounts() { try { const d = await api("/api/assets"); TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); } catch {} }
 
   async function poll() {
-    if (document.querySelector(".drawer")) return;
+    if (SEQ || document.querySelector(".drawer")) return;
     let d; try { d = await api("/api/assets"); } catch { return; }
     const changed = JSON.stringify(d.assets.map((a) => [a.id, a.shield, a.counts])) !== JSON.stringify(ASSETS.map((a) => [a.id, a.shield, a.counts]));
     ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0);
@@ -312,8 +415,15 @@
 
   // ---------- login ----------
   function loginView() {
-    root.innerHTML = `<div class="login"><div class="box"><img src="/logo.svg" alt=""><h1>Lucent Shield</h1><p>Enter your password to continue.</p>
-      <form id="loginForm"><input type="password" name="password" placeholder="Password" autofocus required><button class="btn" type="submit">Unlock</button><div class="err" id="loginErr"></div></form></div></div>`;
+    root.innerHTML = `<div class="login"><div class="box">
+      <div class="shieldwrap"><div class="glow"></div><div class="ring"></div><img src="/logo.png" alt="Lucent Shield"></div>
+      <div class="pill"><span class="d"></span>Protected access</div>
+      <h1>Lucent Shield</h1><p>Enter your password to open your dashboard.</p>
+      <form id="loginForm"><input type="password" name="password" placeholder="Password" autofocus required>
+        <button class="btn" type="submit">Unlock</button><div class="err" id="loginErr"></div></form>
+      <div class="foot"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></div>
+      <div class="cap">Created by Bash Lucent · © 2026</div>
+    </div></div>`;
     document.getElementById("loginForm").onsubmit = async (e) => {
       e.preventDefault(); const err = document.getElementById("loginErr"); err.textContent = "";
       try { await api("/api/login", { method: "POST", body: { password: e.target.password.value } }); start(); } catch (ex) { err.textContent = ex.message; }

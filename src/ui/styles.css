@@ -112,8 +112,10 @@ a { color: var(--green); text-decoration: none; }
 .herolock.secure { --lock: var(--green); }
 .herolock.exposed { --lock: var(--red); }
 .herolock.exposed .shackle { transform: rotate(30deg) translate(-2px,-6px); }
-.herolock.scanning { --lock: var(--cyan); }
+.herolock.scanning { --lock: var(--red); }
 .herolock.scanning .shackle { transform: rotate(30deg) translate(-2px,-6px); }
+.herolock.securing { --lock: var(--amber); }
+.herolock.securing .shackle { transform: rotate(18deg) translate(-1px,-4px); }
 .herolock.new { --lock: #64748b; }
 .herolock.new .shackle { transform: rotate(30deg) translate(-2px,-6px); }
 
@@ -225,6 +227,87 @@ a { color: var(--green); text-decoration: none; }
 .login h1 { font-size: 21px; margin: 12px 0 4px; } .login p { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
 .login input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 12px; color: var(--text); margin-bottom: 10px; }
 .login .btn { width: 100%; }
+
+/* ============ favicon flowing through the padlock ============ */
+.herolock .flow {
+  position: absolute; top: calc(50% + 6px); left: 50%; width: 38px; height: 38px;
+  margin: -19px 0 0 -19px; z-index: 1; display: grid; place-items: center; pointer-events: none;
+  animation: flowThrough 3.6s linear infinite;
+}
+.herolock .flow .fav, .herolock .flow .glyph {
+  position: absolute; width: 34px; height: 34px; border-radius: 9px;
+  filter: drop-shadow(0 0 7px var(--lock));
+}
+.herolock .flow .glyph { display: grid; place-items: center; color: var(--lock); background: #081018; border: 1px solid color-mix(in srgb, var(--lock) 50%, transparent); }
+.herolock .flow .fav { background: #081018; object-fit: cover; }
+@keyframes flowThrough {
+  0%   { transform: translateX(-108px) scale(.72); opacity: 0; }
+  14%  { opacity: 1; }
+  44%  { transform: translateX(-4px) scale(1); opacity: 1; }
+  50%  { transform: translateX(0) scale(.5); opacity: .12; }
+  56%  { transform: translateX(4px) scale(1); opacity: 1; }
+  86%  { opacity: 1; }
+  100% { transform: translateX(108px) scale(.72); opacity: 0; }
+}
+.herolock.scanning .flow { animation-duration: 1.9s; }
+.herolock.securing .flow { animation-duration: 2.6s; }
+.herolock.secure   .flow { animation-duration: 4.4s; }
+.herolock.new      .flow { display: none; }
+
+/* scan line sweeping the lock while probing */
+.herolock .scanline { position: absolute; width: 150px; height: 2px; z-index: 3; left: 50%; margin-left: -75px;
+  background: linear-gradient(90deg, transparent, var(--lock), transparent); opacity: 0; }
+.herolock.scanning .scanline, .herolock.securing .scanline { opacity: .9; animation: sweepY 1.5s ease-in-out infinite; }
+@keyframes sweepY { 0%,100% { transform: translateY(-58px); } 50% { transform: translateY(58px); } }
+
+/* ============ live sequence: log stream + protection meter ============ */
+.seq { margin-top: 2px; }
+.meter { height: 9px; border-radius: 999px; background: #0a1322; border: 1px solid var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; border-radius: 999px;
+  background: linear-gradient(90deg, var(--red), var(--amber) 55%, var(--green)); transition: width .5s ease; }
+.mlabel { font-size: 12.5px; color: var(--muted); margin: 7px 0 12px; }
+.mlabel b { color: var(--text); }
+.logstream { font: 12px/1.7 var(--mono); background: #05080f; border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; height: 132px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.logline { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; animation: logIn .25s forwards; }
+.logline .ok { color: var(--green); } .logline .bad { color: #ff8a8a; } .logline .run { color: var(--cyan); }
+.logline b { color: #cdd8f0; font-weight: 600; }
+@keyframes logIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.secbtn { margin-top: 13px; background: linear-gradient(90deg, var(--red), #b91c1c); color: #fff; font-weight: 700;
+  border-radius: 12px; padding: 12px 20px; box-shadow: 0 0 26px -8px var(--red); }
+.secbtn:hover { filter: brightness(1.08); }
+.secbtn.done { background: linear-gradient(90deg, var(--green), var(--green2)); color: #04140e; box-shadow: 0 0 26px -8px var(--green); }
+
+/* ============ app footer ============ */
+.appfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 34px; padding-top: 18px;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+.appfoot a { color: var(--muted); } .appfoot a:hover { color: var(--text); }
+.appfoot .sp { flex: 1; }
+
+/* ============ dynamic login ============ */
+.login { position: relative; overflow: hidden; }
+.login::before { content: ""; position: absolute; width: 520px; height: 520px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(59,130,246,.16), transparent 62%); top: -120px; filter: blur(8px); }
+.login .box { position: relative; z-index: 2; width: 360px; padding: 34px 30px; }
+.login .shieldwrap { position: relative; width: 112px; height: 112px; margin: 0 auto 6px; display: grid; place-items: center; }
+.login .shieldwrap .ring, .login .shieldwrap .ring::before {
+  position: absolute; border-radius: 50%; border: 1.5px solid var(--cyan); }
+.login .shieldwrap .ring { width: 104px; height: 104px; opacity: .35; animation: beep 2s infinite; }
+.login .shieldwrap .ring::before { content: ""; inset: -16px; opacity: .5; border-color: var(--blue); }
+.login .shieldwrap .glow { position: absolute; width: 150px; height: 150px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(34,211,238,.28), transparent 60%); animation: beep 2s infinite; }
+.login img { width: 86px; height: 86px; position: relative; z-index: 2; border-radius: 16px; }
+.login .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--green);
+  background: #0c2b22; border: 1px solid #124535; border-radius: 999px; padding: 4px 11px; margin: 4px 0 2px; }
+.login .pill .d { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: beep 1.4s infinite; }
+.login .foot { margin-top: 16px; display: flex; justify-content: center; gap: 14px; font-size: 12px; }
+.login .foot a { color: var(--muted); } .login .foot a:hover { color: var(--text); }
+.login .cap { color: var(--faint); font-size: 11.5px; margin-top: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .herolock .flow, .herolock .halo, .herolock .scanline, .login .shieldwrap .ring, .login .shieldwrap .glow,
+  .login .pill .d, .hero .live .dot, .card.s-secure .glow, .card.s-scanning .padlock { animation: none !important; }
+}
 
 @media (max-width: 980px) {
   .app { grid-template-columns: 1fr; } .side { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; }

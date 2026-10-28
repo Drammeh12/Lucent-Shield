@@ -40,6 +40,7 @@ const DATA_DIR = resolve(process.env.LUCENT_DATA_DIR ?? "data");
 const FILE = join(DATA_DIR, "assets.json");
 const ALERTS_FILE = join(DATA_DIR, "alerts.json");
 const META_FILE = join(DATA_DIR, "meta.json");
+const AUTH_FILE = join(DATA_DIR, "authorizations.json");
 
 function loadMeta(): { scans: number } {
   try { return JSON.parse(readFileSync(META_FILE, "utf8")); } catch { return { scans: 0 }; }
@@ -159,5 +160,14 @@ export const store = {
 
   markAlertsRead(): void {
     persistAlerts(loadAlerts().map((a) => ({ ...a, read: true })));
+  },
+
+  /** Audit record: the operator gave explicit authorization to test a target. */
+  logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string }): void {
+    let list: any[] = [];
+    try { list = JSON.parse(readFileSync(AUTH_FILE, "utf8")); } catch { /* new file */ }
+    list.unshift({ ...entry, at: new Date().toISOString() });
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(AUTH_FILE, JSON.stringify(list.slice(0, 1000), null, 2));
   },
 };

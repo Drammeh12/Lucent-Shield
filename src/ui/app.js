@@ -260,9 +260,35 @@
   function hideSecBtn() { const b = heroEl("secBtn"); if (b) b.hidden = true; }
   function finishSeqSoon(ms = 3200) { setTimeout(async () => { SEQ = false; await refresh(); if (VIEW === "dashboard") renderView(); }, ms); }
 
+  // Explicit, per-run authorization before ANY test (white box, black box or
+  // forensics). Required every time, even after the terms were accepted.
+  function authorizeScan(kind, target) {
+    return new Promise((resolve) => {
+      const label = kind === "repo" ? "white-box (full code) test" : kind === "web" ? "black-box (external) test" : "forensic examination";
+      const noun = kind === "repo" ? "repository or folder" : kind === "web" ? "website" : "file or artifact";
+      const bg = document.createElement("div"); bg.className = "drawer-bg";
+      const m = document.createElement("div"); m.className = "authbox";
+      m.innerHTML = `
+        <div class="ah">${ic("shield", 20)} Authorization required</div>
+        <p>You are about to run a <b>${label}</b> against:</p>
+        <div class="tgt">${esc(target)}</div>
+        <p class="warn">Only test systems you own or have explicit permission to test. Running a test against a ${noun} you are not authorised to test may be illegal, and the responsibility is yours.</p>
+        <label class="chk2"><input type="checkbox" id="authChk"><span>I confirm I own this ${noun} or have explicit authorisation to test it, and I give Lucent Shield explicit permission to scan it and identify vulnerabilities.</span></label>
+        <div class="arow"><button class="ghost" id="authCancel">Cancel</button><button class="btn" id="authGo" disabled>Authorise &amp; run</button></div>
+        <div class="fine">This authorisation is recorded with a timestamp.</div>`;
+      document.body.append(bg, m);
+      const done = (v) => { bg.remove(); m.remove(); resolve(v); };
+      bg.onclick = () => done(false);
+      m.querySelector("#authCancel").onclick = () => done(false);
+      const chk = m.querySelector("#authChk"), go = m.querySelector("#authGo");
+      chk.onchange = () => { go.disabled = !chk.checked; };
+      go.onclick = () => { if (chk.checked) done(true); };
+    });
+  }
+
   async function runScanSequence(target) {
     if (!target) return;
-    if (!confirm(`Confirm you own or are authorised to test:\n${target}`)) return;
+    if (!(await authorizeScan("web", target))) return;
     let asset;
     try {
       const r = await api("/api/assets", { method: "POST", body: { name: target.replace(/^https?:\/\//, ""), kind: "web", target, authorized: true } });
@@ -273,7 +299,7 @@
     ASSETS = [{ ...asset }, ...ASSETS];
     renderView();
     enterSeq(); setFocusIcon(asset); setHero("scanning", `Scanning ${esc(host)}…`); setStatus("SCANNING");
-    const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST" }).catch(() => null);
+    const scanP = api(`/api/assets/${asset.id}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
     const lines = [["run", `Resolving host <b>${esc(host)}</b>`], ["run", "Opening secure connection"], ["", "Reading response headers"], ["", "Checking TLS and HSTS"], ["", "Inspecting cookies"], ["", "Probing for exposed files"], ["", "Evaluating content security policy"]];
     for (const [c, t] of lines) { logLine(c, t); await wait(440); }
     logLine("run", "Scoring exposure…");
@@ -330,7 +356,7 @@
       for (const [pct, t] of [[40, "Applying hardening baseline"], [70, "Enabling continuous monitoring"], [90, "Arming threat alerts"]]) { logLine("", t); setMeter(pct); await wait(520); }
     }
     logLine("run", "Re-scanning to verify…");
-    const res = await api(`/api/assets/${assetId}/scan`, { method: "POST" }).catch(() => null);
+    const res = await api(`/api/assets/${assetId}/scan`, { method: "POST", body: { authorized: true } }).catch(() => null);
     const a = res?.asset; if (a) { ASSETS = ASSETS.map((x) => (x.id === assetId ? { ...x, ...a } : x)); TOTAL_SCANS++; }
     await wait(420);
     const bad = a ? a.counts.critical + a.counts.high : 1;
@@ -354,7 +380,6 @@
         </select></div>
         <div class="field"><label>Target</label><input name="target" placeholder="github.com/you/repo  ·  /path/to/repo  ·  https://yoursite.com" required maxlength="2000"></div>
         <button class="btn" type="submit">Add & protect</button>
-        <label class="auth" id="authRow" hidden><input type="checkbox" name="authorized"> I own this site or am authorised to test it.</label>
         <div class="err" id="addErr"></div>
       </form>
       <div class="grid" id="grid">${ASSETS.length ? ASSETS.map(cardHtml).join("") : `<div class="empty">No assets yet. Add one above.</div>`}</div>`;
@@ -378,14 +403,15 @@
   }
 
   function wireAssets() {
-    const form = document.getElementById("addForm"), authRow = document.getElementById("authRow"), kindSel = form.kind;
-    const syncAuth = () => { authRow.hidden = kindSel.value !== "web"; };
-    kindSel.onchange = syncAuth; syncAuth();
+    const form = document.getElementById("addForm"), kindSel = form.kind;
     form.onsubmit = async (e) => {
       e.preventDefault(); const err = document.getElementById("addErr"); err.textContent = "";
+      const name = form.name.value.trim(), kind = kindSel.value, target = form.target.value.trim();
+      if (!name || !target) { err.textContent = "Give it a name and a target."; return; }
+      if (!(await authorizeScan(kind, target))) return;
       try {
-        const { asset } = await api("/api/assets", { method: "POST", body: { name: form.name.value.trim(), kind: kindSel.value, target: form.target.value.trim(), authorized: form.authorized?.checked || false } });
-        form.reset(); syncAuth(); await refresh(); renderView(); scanAsset(asset.id, true);
+        const { asset } = await api("/api/assets", { method: "POST", body: { name, kind, target, authorized: true } });
+        form.reset(); await refresh(); renderView(); scanAsset(asset.id, { preauth: true });
       } catch (ex) { err.textContent = ex.message; }
     };
     document.getElementById("grid").onclick = (e) => {
@@ -398,12 +424,14 @@
   function cardEl(id) { return document.querySelector(`.card[data-id="${id}"]`); }
   function setCard(id) { const a = ASSETS.find((x) => x.id === id), el = cardEl(id); if (a && el) el.outerHTML = cardHtml(a); }
 
-  async function scanAsset(id, silent) {
+  async function scanAsset(id, opts = {}) {
+    const a0 = ASSETS.find((x) => x.id === id); if (!a0) return;
+    if (!opts.preauth && !(await authorizeScan(a0.kind, a0.target))) return;
     const el = cardEl(id);
     if (el) { el.className = "card s-scanning scan-sweep"; const s = el.querySelector(".state"); if (s) s.textContent = "Scanning…"; }
     if (VIEW === "dashboard") { const hs = document.querySelector(".herolock"); if (hs) hs.className = "herolock scanning"; }
     try {
-      const { asset } = await api(`/api/assets/${id}/scan`, { method: "POST" });
+      const { asset } = await api(`/api/assets/${id}/scan`, { method: "POST", body: { authorized: true } });
       ASSETS = ASSETS.map((a) => (a.id === id ? { ...a, ...asset } : a));
       await refreshCounts();
       if (VIEW === "assets") setCard(id); else renderView();

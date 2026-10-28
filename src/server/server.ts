@@ -227,7 +227,14 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     if (!asset) return json(res, 404, { error: "Not found." });
 
     if (idMatch[2] === "/scan" && method === "POST") {
+      // Every scan needs explicit, per-run authorization — even after the
+      // asset was added. This is the operator affirming they may test it.
+      const body = await readBody(req);
+      if (body.authorized !== true) {
+        return json(res, 403, { error: "Explicit authorization is required to run this test. Confirm you own or are authorised to test this target." });
+      }
       if (asset.kind === "web" && !asset.authorized) return json(res, 403, { error: "Not authorised to scan this site." });
+      store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req) });
       const result = await runScan(asset.kind, asset.target);
       const updated = store.saveScan(id, result);
       return json(res, 200, { asset: updated });

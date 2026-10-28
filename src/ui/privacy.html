@@ -35,10 +35,13 @@
   <p>Lucent Shield is built to protect you, so it collects as little as it can. This page explains what it keeps and why.</p>
 
   <h2>What we store</h2>
-  <p>We store the assets you choose to protect, their scan results, and the alerts those scans produce. This lives on your own Lucent Shield instance so you can come back and see the history. We do not sell it, and we do not share it with anyone.</p>
+  <p>For your account we store your name, your email address, when you created the account and when you last logged in. We also store the assets you choose to protect, their scan results, the alerts those scans produce, and a record of each scan you authorised (when, and from which internet address), so there is always proof that a test was permitted. Only you can see your assets and results. We do not sell any of it, and we do not share it with anyone.</p>
 
-  <h2>What we do not store</h2>
-  <p>We do not ask for personal details to use the tool. Access is protected by a single password that you set yourself, and that password is never shown back to you or written into your data.</p>
+  <h2>Your password</h2>
+  <p>Your password is never stored. We keep only a one-way scrambled form of it (a salted scrypt hash), which is enough to check it when you log in but cannot be turned back into the password, not even by us.</p>
+
+  <h2>Security records</h2>
+  <p>To protect accounts, we record log-in and sign-up attempts with the email used, the internet address and the time. The person who runs this Lucent Shield service can see these records, the list of accounts, and the authorization records, so they can stop misuse.</p>
 
   <h2>Scanning other sites</h2>
   <p>When you scan a website, Lucent Shield makes ordinary, read-only requests to it, the same kind a normal visitor's browser makes. To show a site's icon in the dashboard, it fetches that icon through a public icon service. It never sends your scan results anywhere outside your instance.</p>
@@ -47,7 +50,7 @@
   <p>If you choose to connect an alerts webhook, such as Slack or Discord, Lucent Shield will send a short alert message there when a watched asset changes. That is the only time information leaves your instance, and only because you asked it to.</p>
 
   <h2>Cookies</h2>
-  <p>Lucent Shield uses one essential cookie to keep you logged in after you enter your password. There is no tracking and no advertising.</p>
+  <p>Lucent Shield uses one essential cookie to keep you logged in for up to 24 hours after you log in. There is no tracking and no advertising.</p>
 
   <h2>Contact</h2>
   <p>For anything about your data, reach Bash Lucent through the contact details on our main site.</p>

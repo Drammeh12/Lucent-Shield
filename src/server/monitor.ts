@@ -5,6 +5,7 @@
 // also POSTed to that URL (works with Slack, Discord or any webhook).
 
 import { store, type Asset } from "./store.ts";
+import { scanOptionsFor } from "./access.ts";
 import { runScan, type Shield } from "../engine.ts";
 
 const INTERVAL_MIN = Math.max(5, Number(process.env.LUCENT_SCAN_INTERVAL_MIN) || 360);
@@ -42,6 +43,11 @@ async function dispatch(message: string, extra: object): Promise<void> {
   }
 }
 
+// The webhook belongs to whoever runs this server, so only their own assets are sent to it.
+function isAdminOwned(asset: Asset): boolean {
+  return !!asset.ownerId && scanOptionsFor(asset.ownerId).admin === true;
+}
+
 async function scanOne(asset: Asset): Promise<void> {
   const beforeShield = asset.shield;
   const beforeHighCrit = asset.counts.critical + asset.counts.high;
@@ -49,7 +55,7 @@ async function scanOne(asset: Asset): Promise<void> {
   if (!store.beginScan(asset.id)) return; // a manual scan is already running
   let updated;
   try {
-    const result = await runScan(asset.kind, asset.target);
+    const result = await runScan(asset.kind, asset.target, scanOptionsFor(asset.ownerId));
     updated = store.saveScan(asset.id, result);
   } finally {
     store.endScan(asset.id);
@@ -65,12 +71,12 @@ async function scanOne(asset: Asset): Promise<void> {
 
   if (worse) {
     const msg = `🔓 Lucent Shield: "${updated.name}" is now ${updated.shield.toUpperCase()}: ${updated.counts.critical} critical, ${updated.counts.high} high, ${updated.counts.medium} medium.`;
-    store.addAlert({ assetId: updated.id, assetName: updated.name, type: afterHighCrit > beforeHighCrit && RANK[updated.shield] === RANK[beforeShield] ? "new-issues" : "worsened", message: msg });
-    await dispatch(msg, { asset: updated.name, shield: updated.shield });
+    store.addAlert({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: afterHighCrit > beforeHighCrit && RANK[updated.shield] === RANK[beforeShield] ? "new-issues" : "worsened", message: msg });
+    if (isAdminOwned(updated)) await dispatch(msg, { asset: updated.name, shield: updated.shield });
   } else if (recovered) {
     const msg = `🔒 Lucent Shield: "${updated.name}" is protected again. All critical and high issues are cleared.`;
-    store.addAlert({ assetId: updated.id, assetName: updated.name, type: "recovered", message: msg });
-    await dispatch(msg, { asset: updated.name, shield: updated.shield });
+    store.addAlert({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: "recovered", message: msg });
+    if (isAdminOwned(updated)) await dispatch(msg, { asset: updated.name, shield: updated.shield });
   }
 }
 

@@ -16,7 +16,7 @@ import { countBySeverity, type Finding, type ScanResult } from "./types.ts";
 
 const pexec = promisify(execFile);
 
-export const VERSION = "0.10.0";
+export const VERSION = "0.11.0";
 
 export type AssetKind = "repo" | "web" | "artifact";
 export type Shield = "secure" | "at_risk" | "exposed" | "scanning" | "new";
@@ -35,11 +35,10 @@ export function isGitUrl(t: string): boolean {
     && !existsSync(t);
 }
 
-/** Shallow-clone a repo to a throwaway dir. Private repos use LUCENT_GITHUB_TOKEN. */
-async function cloneRepo(url: string): Promise<string> {
+/** Shallow-clone a repo to a throwaway dir. A token, when given, reaches private GitHub repos. */
+async function cloneRepo(url: string, token?: string): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "lucent-"));
   let clone = url.trim().replace(/\/$/, "");
-  const token = process.env.LUCENT_GITHUB_TOKEN;
   if (token && /^https:\/\/github\.com\//i.test(clone)) {
     clone = clone.replace(/^https:\/\//i, `https://${token}@`);
   }
@@ -85,9 +84,14 @@ export async function runRepoScan(dir: string, opts: RepoScanOptions = {}): Prom
   return (await scanRepoFolder(dir, opts)).findings;
 }
 
-export async function runScan(kind: AssetKind, target: string): Promise<ScanResult> {
+export interface RunOptions {
+  /** Token for private GitHub repositories. */
+  githubToken?: string;
+}
+
+export async function runScan(kind: AssetKind, target: string, opts: RunOptions = {}): Promise<ScanResult> {
   try {
-    return await runScanInner(kind, target);
+    return await runScanInner(kind, target, opts);
   } catch (err) {
     const now = new Date().toISOString();
     return { tool: "Lucent Shield", version: VERSION, target, mode: kind === "web" ? "web" : "repo", startedAt: now, finishedAt: now, filesScanned: 0,
@@ -95,7 +99,7 @@ export async function runScan(kind: AssetKind, target: string): Promise<ScanResu
   }
 }
 
-async function runScanInner(kind: AssetKind, target: string): Promise<ScanResult> {
+async function runScanInner(kind: AssetKind, target: string, opts: RunOptions): Promise<ScanResult> {
   const startedAt = new Date().toISOString();
   let findings: Finding[] = [];
   let filesScanned = 0;
@@ -105,13 +109,13 @@ async function runScanInner(kind: AssetKind, target: string): Promise<ScanResult
     let cleanup = false;
     if (isGitUrl(target)) {
       try {
-        dir = await cloneRepo(target);
+        dir = await cloneRepo(target, opts.githubToken);
         cleanup = true;
       } catch {
         findings = [{
           rule: "repo.clone-failed", severity: "info", category: "code", location: target,
           title: "Could not access the repository",
-          detail: "Lucent Shield could not clone this repository. If it is private, set a LUCENT_GITHUB_TOKEN on the server. Otherwise check the URL.",
+          detail: "Lucent Shield could not download this repository. Check the URL. Private repositories cannot be read yet, so make it public for the scan or scan a copy you can share.",
           remediation: "Confirm the repository URL is correct and reachable, and that a token is set for private repositories.",
         }];
         return { tool: "Lucent Shield", version: VERSION, target, mode: "repo", startedAt, finishedAt: new Date().toISOString(), filesScanned: 0, findings };

@@ -54,7 +54,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null;
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -84,7 +84,7 @@
           <div class="crumbs">Scan · Detect · <b>Secure</b></div>
           <div class="sp"></div>
           <button class="iconbtn" id="bell">${ic("bell")}<span class="badge" id="bellBadge" hidden>0</span></button>
-          <div class="user"><span class="av">BL</span><b>Bash Lucent</b>${ADMIN ? `<span class="tag secure">Admin</span>` : ""}</div>
+          <div class="user"><span class="av">${esc(initials(ME?.name || ME?.email))}</span><b>${esc(ME?.name || "")}</b>${ADMIN ? `<span class="tag secure">Admin</span>` : ""}</div>
         </div>
         <div class="content" id="view"></div>
         <div class="content"><div class="appfoot">
@@ -98,6 +98,8 @@
     document.getElementById("bell").onclick = openAlerts;
     setBell(UNREAD);
   }
+
+  function initials(n) { const p = String(n || "?").trim().split(/[\s@.]+/).filter(Boolean); return ((p[0]?.[0] || "?") + (p[1]?.[0] || "")).toUpperCase(); }
 
   function setBell(n) { UNREAD = n; const b = document.getElementById("bellBadge"); if (b) { b.hidden = !n; b.textContent = n > 99 ? "99+" : n; } }
 
@@ -137,7 +139,7 @@
       secure: "Lucent Shield is watching your assets around the clock. Everything is locked and secure.",
       exposed: "One or more assets have open issues. Open them to see exactly what to fix.",
       scanning: "Lucent Shield is actively scanning for secrets, vulnerabilities and exposed files.",
-      new: "Protect a code repo, a website you own, or inspect a forensic artifact.",
+      new: ADMIN ? "Protect a code repo, a website you own, or inspect a forensic artifact." : "Protect a code repository or a website you own.",
     };
     const focus = focusAsset();
     return `<div class="hero ${st}" id="hero">
@@ -183,7 +185,8 @@
       <div class="rt"><div class="t">${esc(a.name)}</div><div class="s">scanned ${timeAgo(a.lastScanAt)}</div></div>
       <span class="tag ${a.shield}">${STATE_LABEL[a.shield]}</span></div>`).join("") || `<div class="empty">No assets yet.</div>`;
 
-    const scanTypes = [["repo", "code", "White box (pen test)", "Full access · deep code analysis"], ["web", "mask", "Black box", "No access · external view"], ["artifact", "finger", "Forensics", "Investigate · collect evidence"]]
+    const scanTypes = [["repo", "code", "White box", "Full access · deep code analysis"], ["web", "mask", "Black box", "No access · external view"], ["artifact", "finger", "Forensics", "Investigate · collect evidence"]]
+      .filter(([k]) => ADMIN || k !== "artifact")
       .map(([k, i, t, s]) => `<div class="row" data-kind="${k}" style="cursor:pointer"><div class="ri">${ic(i)}</div><div class="rt"><div class="t">${t}</div><div class="s">${s}</div></div><span class="chev">${ic("chev", 16)}</span></div>`).join("");
 
     const activity = buildActivity().slice(0, 6).map((e) => `<div class="row"><span class="dotline" style="background:${e.color}"></span><div class="rt"><div class="t">${esc(e.text)}</div><div class="s">${timeAgo(e.when)}</div></div></div>`).join("") || `<div class="empty">No activity yet.</div>`;
@@ -440,9 +443,9 @@
     return `<form class="add" id="addForm">
         <div class="field"><label>Name</label><input name="name" placeholder="My website" required maxlength="100"></div>
         <div class="field"><label>Kind</label><select name="kind">
-          <option value="repo">Code repo (white box)</option><option value="web">Website (black box)</option><option value="artifact">Artifact (forensics)</option>
+          <option value="repo">Code repo (white box)</option><option value="web">Website (black box)</option>${ADMIN ? `<option value="artifact">Artifact (forensics)</option>` : ""}
         </select></div>
-        <div class="field"><label>Target</label><input name="target" placeholder="github.com/you/repo  ·  /path/to/repo  ·  https://yoursite.com" required maxlength="2000"></div>
+        <div class="field"><label>Target</label><input name="target" placeholder="${ADMIN ? "https://github.com/you/repo  ·  /path/on/server  ·  https://yoursite.com" : "https://github.com/you/repo  ·  https://yoursite.com"}" required maxlength="2000"></div>
         <button class="btn" type="submit">Add & protect</button>
         <div class="err" id="addErr"></div>
       </form>
@@ -561,7 +564,8 @@
       <div class="kv"><span class="k">Monitored assets</span><b>${watching} of ${ASSETS.length}</b></div>
       <div class="kv"><span class="k">Auto re-scan</span><span>On the server schedule (<code>LUCENT_SCAN_INTERVAL_MIN</code>)</span></div>
       <div class="kv"><span class="k">Alerts webhook</span><span>Set <code>LUCENT_ALERT_WEBHOOK</code> to also send to Slack/Discord</span></div>
-      <div class="kv"><span class="k">Login</span><button class="btn" id="logout" style="padding:7px 14px">Log out</button></div>
+      <div class="kv"><span class="k">Account</span><span>${esc(ME?.name || "")} · ${esc(ME?.email || "")}</span></div>
+      <div class="kv"><span class="k">Signed in</span><button class="btn" id="logout" style="padding:7px 14px">Log out</button></div>
     </div>`;
   }
   function wireSettings() { const b = document.getElementById("logout"); if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); }; }
@@ -580,14 +584,14 @@
     const stat = (cls, icon, label, n, sub, subcls = "") => `<div class="stat"><div class="si ${cls}">${ic(icon, 20)}</div><div><div class="l">${label}</div><div class="n">${n}</div><div class="sub ${subcls}">${sub}</div></div></div>`;
     const open = t.severity.critical + t.severity.high;
     const warnings = [];
-    if (!st.password) warnings.push("No dashboard password is set (LUCENT_PASSWORD). Anyone who can reach the server can open it.");
+    if (!st.signupsOpen) warnings.push("New sign-ups are closed (LUCENT_SIGNUPS=closed). Only existing accounts can log in.");
     if (!st.httpsCookies) warnings.push("The login cookie is not marked Secure. Set TRUST_PROXY=1 when serving over HTTPS.");
     if (st.internalTargetsAllowed) warnings.push("Internal network targets are allowed (LUCENT_ALLOW_INTERNAL=1). Turn this off in production.");
     if (t.failedLogins24h >= 5) warnings.push(`${t.failedLogins24h} failed sign-ins in the last 24 hours. Someone may be guessing the password.`);
 
     el.innerHTML = `
       <div class="stats">
-        ${stat("blue", "assets", "Assets", t.assets, `${t.byKind.repo} code · ${t.byKind.web} sites · ${t.byKind.artifact} forensic`)}
+        ${stat("blue", "assets", "Accounts", t.users, `${t.assets} ${t.assets === 1 ? "asset" : "assets"}: ${t.byKind.repo} code, ${t.byKind.web} sites, ${t.byKind.artifact} forensic`)}
         ${stat("red", "alert", "Critical and high", open, open ? "Open across all assets" : "None open", open ? "bad" : "ok")}
         ${stat("violet", "radar", "Scans run", t.scans, `${t.monitored} ${t.monitored === 1 ? "asset" : "assets"} monitored`)}
         ${stat(t.failedLogins24h ? "red" : "green", "key", "Failed sign-ins", t.failedLogins24h, "in the last 24 hours", t.failedLogins24h ? "bad" : "ok")}
@@ -597,21 +601,27 @@
         <div class="pnl">
           <div class="ph"><h3>${ic("shield", 16)} Authorization audit</h3><a class="all" href="/api/admin/audit.json" download>Download</a></div>
           <p class="adm-note">Every scan is recorded here with who confirmed it, from where, and when. Forensic scans carry their legal reference.</p>
-          ${d.authorizations.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Asset</th><th>Type</th><th>From</th><th>Reference</th></tr></thead><tbody>
-            ${d.authorizations.slice(0, 60).map((a) => `<tr><td>${new Date(a.at).toLocaleString()}</td><td title="${esc(a.target)}">${esc(a.name)}</td><td>${esc(KIND_LABEL[a.kind] || a.kind)}</td><td class="mono">${esc(a.ip)}</td><td>${esc(a.reference || "")}</td></tr>`).join("")}
+          ${d.authorizations.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Asset</th><th>By</th><th>Type</th><th>From</th><th>Reference</th></tr></thead><tbody>
+            ${d.authorizations.slice(0, 60).map((a) => `<tr><td>${new Date(a.at).toLocaleString()}</td><td title="${esc(a.target)}">${esc(a.name)}</td><td>${esc(a.email || "")}</td><td>${esc(KIND_LABEL[a.kind] || a.kind)}</td><td class="mono">${esc(a.ip)}</td><td>${esc(a.reference || "")}</td></tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">No scans authorized yet.</div>`}
         </div>
         <div class="pnl">
           <div class="ph"><h3>${ic("key", 16)} Sign-ins</h3></div>
-          ${d.logins.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Account</th><th>From</th><th>Result</th></tr></thead><tbody>
-            ${d.logins.slice(0, 40).map((l) => `<tr><td>${new Date(l.at).toLocaleString()}</td><td>${l.role === "admin" ? "Admin" : "Dashboard"}</td><td class="mono">${esc(l.ip)}</td><td><span class="tag ${l.ok ? "secure" : "exposed"}">${l.ok ? "Signed in" : "Refused"}</span></td></tr>`).join("")}
+          ${d.logins.length ? `<div class="adm-table"><table><thead><tr><th>When</th><th>Email</th><th>From</th><th>Result</th></tr></thead><tbody>
+            ${d.logins.slice(0, 40).map((l) => `<tr><td>${new Date(l.at).toLocaleString()}</td><td>${esc(l.email || "")}</td><td class="mono">${esc(l.ip)}</td><td><span class="tag ${l.ok ? "secure" : "exposed"}">${l.event === "signup" ? (l.ok ? "Account created" : "Sign-up refused") : (l.ok ? "Logged in" : "Refused")}</span></td></tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">No sign-ins recorded yet.</div>`}
         </div>
       </div>
       <div class="pnl adm-block">
+        <div class="ph"><h3>${ic("key", 16)} Accounts</h3></div>
+        ${d.users.length ? `<div class="adm-table"><table><thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last login</th><th>Assets</th><th>Scans</th></tr></thead><tbody>
+          ${d.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.admin ? ` <span class="tag secure">Admin</span>` : ""}</td><td>${esc(u.email)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.lastLoginAt ? timeAgo(u.lastLoginAt) : "never"}</td><td>${u.assets}</td><td>${u.scans || 0}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty">No accounts yet.</div>`}
+      </div>
+      <div class="pnl adm-block">
         <div class="ph"><h3>${ic("assets", 16)} All assets</h3></div>
-        ${d.assets.length ? `<div class="adm-table"><table><thead><tr><th>Asset</th><th>Type</th><th>State</th><th>Open issues</th><th>Ownership</th><th>Monitor</th><th>Last scan</th></tr></thead><tbody>
-          ${d.assets.map((a) => `<tr><td><b>${esc(a.name)}</b><div class="mono sub">${esc(a.target)}</div></td><td>${esc(KIND_LABEL[a.kind])}</td><td><span class="tag ${esc(a.shield)}">${esc(STATE_LABEL[a.shield])}</span></td>
+        ${d.assets.length ? `<div class="adm-table"><table><thead><tr><th>Asset</th><th>Owner</th><th>Type</th><th>State</th><th>Open issues</th><th>Ownership</th><th>Monitor</th><th>Last scan</th></tr></thead><tbody>
+          ${d.assets.map((a) => `<tr><td><b>${esc(a.name)}</b><div class="mono sub">${esc(a.target)}</div></td><td>${esc(a.owner || "")}</td><td>${esc(KIND_LABEL[a.kind])}</td><td><span class="tag ${esc(a.shield)}">${esc(STATE_LABEL[a.shield])}</span></td>
             <td>${SEVERITY_ORDER.slice(0, 4).filter((s) => a.counts?.[s]).map((s) => `<span class="sev ${s}">${a.counts[s]} ${s}</span>`).join(" ") || "None"}</td>
             <td>${a.kind === "web" ? (a.verified ? `<span class="tag secure">Verified</span>` : `<span class="tag at_risk">Not verified</span>`) : "Not needed"}</td>
             <td>${a.monitor ? "On" : "Off"}</td><td>${timeAgo(a.lastScanAt)}</td></tr>`).join("")}
@@ -626,8 +636,7 @@
           <div class="kv"><span class="k">Node.js</span><span>${esc(sys.node)}</span></div>
         </div>
         <div class="set">
-          <div class="kv"><span class="k">Dashboard password</span>${yes(st.password)}</div>
-          <div class="kv"><span class="k">Admin sign-in</span>${yes(st.admin)}</div>
+          <div class="kv"><span class="k">New sign-ups</span>${yes(st.signupsOpen)}</div>
           <div class="kv"><span class="k">Secure cookies (HTTPS)</span>${yes(st.httpsCookies)}</div>
           <div class="kv"><span class="k">Private GitHub access</span>${yes(st.githubToken)}</div>
           <div class="kv"><span class="k">Slack or Discord alerts</span>${yes(st.alertWebhook)}</div>
@@ -649,29 +658,43 @@
   }
 
   // ---------- login ----------
-  function loginView(adminLogin = false) {
+  function loginView(signupsOpen = true, mode = "login") {
+    const signup = mode === "signup";
     root.innerHTML = `<div class="login"><div class="box">
       <div class="shieldwrap"><div class="glow"></div><div class="ring"></div><img src="/logo.png" alt="Lucent Shield"></div>
       <div class="pill"><span class="d"></span>Protected access</div>
-      <h1>Lucent Shield</h1><p>Enter your password to open your dashboard.</p>
-      <form id="loginForm"><input type="email" name="email" placeholder="Admin email" autocomplete="username" hidden>
-        <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
-        <button class="btn" type="submit">Unlock</button><div class="err" id="loginErr"></div>
-        ${adminLogin ? `<button type="button" class="adm-switch" id="admSwitch">Sign in as admin</button>` : ""}</form>
+      <h1>${signup ? "Create your account" : "Log in to Lucent Shield"}</h1>
+      <p>${signup ? "Scan the code and websites you own, and see exactly how to fix what is exposed." : "Welcome back. Log in to see your assets."}</p>
+      <form id="authForm" novalidate>
+        ${signup ? `<label class="lf">Name<input name="name" autocomplete="name" maxlength="80" required></label>` : ""}
+        <label class="lf">Email<input type="email" name="email" autocomplete="email" maxlength="254" required></label>
+        <label class="lf">Password<input type="password" name="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="${signup ? 10 : 1}" maxlength="200" required></label>
+        ${signup ? `<div class="hint">At least 10 characters.</div><label class="agree"><input type="checkbox" name="agree" required><span>I agree to the <a href="/terms" target="_blank">Terms</a> and will only scan what I own or am authorised to test.</span></label>` : ""}
+        <button class="btn" type="submit">${signup ? "Create account" : "Log in"}</button><div class="err" id="loginErr" role="alert"></div>
+      </form>
+      ${signup ? `<div class="switch">Already have an account? <button type="button" id="authSwitch">Log in</button></div>`
+        : signupsOpen ? `<div class="switch">New to Lucent Shield? <button type="button" id="authSwitch">Create an account</button></div>` : ""}
       <div class="foot"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></div>
       <div class="cap">Created by Bash Lucent · © 2026</div>
     </div></div>`;
-    document.getElementById("loginForm").onsubmit = async (e) => {
-      e.preventDefault(); const err = document.getElementById("loginErr"); err.textContent = "";
-      const email = e.target.email.hidden ? "" : e.target.email.value.trim();
-      try { await api("/api/login", { method: "POST", body: email ? { email, password: e.target.password.value } : { password: e.target.password.value } }); boot(); } catch (ex) { err.textContent = ex.message; }
-    };
-    const sw = document.getElementById("admSwitch");
-    if (sw) sw.onclick = () => {
-      const f = document.getElementById("loginForm"), em = f.email, admin = em.hidden;
-      em.hidden = !admin; em.required = admin; sw.textContent = admin ? "Use the dashboard password" : "Sign in as admin";
-      document.querySelector(".login p").textContent = admin ? "Sign in with the admin email and password." : "Enter your password to open your dashboard.";
-      (admin ? em : f.password).focus();
+    const f = document.getElementById("authForm");
+    (f.name || f.email).focus();
+    const sw = document.getElementById("authSwitch");
+    if (sw) sw.onclick = () => loginView(signupsOpen, signup ? "login" : "signup");
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("loginErr"); err.textContent = "";
+      const body = { email: f.email.value.trim(), password: f.password.value };
+      if (signup) {
+        body.name = f.name.value.trim();
+        if (!body.name) return void (err.textContent = "Enter your name.");
+        if (body.password.length < 10) return void (err.textContent = "Use a password of at least 10 characters.");
+        if (!f.agree.checked) return void (err.textContent = "Please agree to the Terms to continue.");
+      }
+      if (!body.email || !body.password) return void (err.textContent = "Enter your email and password.");
+      const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
+      try { await api(signup ? "/api/signup" : "/api/login", { method: "POST", body }); boot(); }
+      catch (ex) { err.textContent = ex.message; btn.disabled = false; }
     };
   }
 
@@ -683,7 +706,12 @@
   }
 
   async function boot() {
-    try { const a = await api("/api/auth"); ADMIN = !!a.admin; if (!ADMIN && VIEW === "admin") VIEW = "dashboard"; if (a.required && !a.authed) loginView(a.adminLogin); else start(); }
+    try {
+      const a = await api("/api/auth");
+      ME = a.user; ADMIN = !!a.user?.admin;
+      if (!ADMIN && VIEW === "admin") VIEW = "dashboard";
+      if (!a.authed) loginView(a.signups); else start();
+    }
     catch { root.innerHTML = `<div class="boot">Could not reach the server.</div>`; }
   }
   boot();

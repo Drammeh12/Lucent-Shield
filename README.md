@@ -8,7 +8,7 @@ Lucent Shield watches the code and websites you own, tells you in plain words wh
 
 ## What it does
 
-**White box, your code.** Point it at a local folder or a GitHub repository and it looks for:
+**White box, your code.** Point it at a GitHub repository (or, from the command line, a local folder) and it looks for:
 
 - Leaked secrets: API keys, tokens, private keys and passwords committed to code (AWS, Stripe, Paystack, GitHub, Google, Slack, JWTs, and generic assignments). Evidence is redacted, so the report is safe to share.
 - Vulnerable dependencies: npm (`package.json`) and PyPI (`requirements.txt`) checked against the [OSV](https://osv.dev) database of known vulnerabilities, with the fixed version to move to.
@@ -76,11 +76,15 @@ npm run web
 # then open http://localhost:4600
 ```
 
-Set a password so only you can open it:
+Open it and create an account. Each account sees only its own assets, scans and alerts.
+
+To become the admin, set an admin email and password before you start, then create your account with exactly that email and that password:
 
 ```bash
-LUCENT_PASSWORD="your-strong-password" npm run web
+LUCENT_ADMIN_EMAIL="you@yourcompany.com" LUCENT_ADMIN_PASSWORD="a-long-admin-password" npm run web
 ```
+
+Nobody else can create an account with the admin email, because it needs the admin password. The admin account also gets the Admin tab.
 
 ## Deploy
 
@@ -88,17 +92,18 @@ A Dockerfile is ready for Bash Cloud or any Docker host.
 
 ```bash
 docker build -t lucent-shield .
-docker run -p 4600:4600 -e LUCENT_PASSWORD="your-strong-password" -v lucent-data:/data lucent-shield
+docker run -p 4600:4600 -e LUCENT_ADMIN_EMAIL="you@yourcompany.com" -e LUCENT_ADMIN_PASSWORD="a-long-admin-password" -v lucent-data:/data lucent-shield
 ```
 
 Settings you pass through the environment:
 
-- `LUCENT_PASSWORD`: the login password. Always set this in production. Without it the dashboard runs open.
+- `LUCENT_ADMIN_EMAIL`: the email of the admin account. Create your account with this email to get the Admin tab: every account, the authorization audit trail (with a download), sign-in and sign-up attempts, all assets, and the server's health and safety settings.
+- `LUCENT_ADMIN_PASSWORD`: needed once, to create the admin account. Without it, nobody can sign up with the admin email.
+- `LUCENT_SIGNUPS=closed`: stop new accounts (the admin can still create theirs).
 - `TRUST_PROXY=1`: mark the login cookie Secure when you serve over HTTPS behind a proxy.
-- `LUCENT_GITHUB_TOKEN`: a token so white box scans can reach your private GitHub repositories.
+- `LUCENT_GITHUB_TOKEN`: a token so the admin's white box scans can reach private GitHub repositories. Other accounts never use it.
 - `LUCENT_ALERT_WEBHOOK`: a Slack or Discord webhook to also receive monitoring alerts.
 - `LUCENT_DATA_DIR`: where to keep your assets and history (defaults to `/data` in Docker).
-- `LUCENT_ADMIN_EMAIL` and `LUCENT_ADMIN_PASSWORD`: turn on the admin sign-in. On the login screen choose "Sign in as admin" and use this email and password. The admin view shows the authorization audit trail (with a download), every sign-in attempt, all assets, and the server's health and safety settings. Use a different password from `LUCENT_PASSWORD`.
 
 ## How well it works
 

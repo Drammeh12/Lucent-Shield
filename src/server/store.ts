@@ -1,15 +1,34 @@
-// Simple, dependency-free persistence: the assets you protect and their last
-// scan, saved as one JSON file in the data directory (a Bash Cloud disk, or
-// ./data locally). Single-user, so no database is needed.
+// Simple, dependency-free persistence in the data directory (a Bash Cloud
+// disk, or ./data locally): user accounts, the assets each user protects and
+// their last scan, alerts, and the audit trails. JSON files written atomically.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { countBySeverity, type Finding, type ScanResult } from "../types.ts";
 import { shieldFor, type AssetKind, type Shield } from "../engine.ts";
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  /** scrypt hash of the password, with its own random salt. Never the password. */
+  salt: string;
+  hash: string;
+  createdAt: string;
+  lastLoginAt: string | null;
+  /** Scans this account has run (shown on its dashboard). */
+  scans: number;
+}
+
+/** What is safe to send to a browser about a user. */
+export type PublicUser = Omit<User, "salt" | "hash">;
+export const publicUser = ({ salt, hash, ...u }: User): PublicUser => u;
+
 export interface Asset {
   id: string;
+  /** The account this asset belongs to. Only that account can see or scan it. */
+  ownerId?: string;
   name: string;
   kind: AssetKind;
   target: string;
@@ -34,6 +53,7 @@ export type AlertType = "worsened" | "recovered" | "new-issues";
 
 export interface Alert {
   id: string;
+  ownerId?: string;
   assetId: string;
   assetName: string;
   type: AlertType;
@@ -48,6 +68,14 @@ const ALERTS_FILE = join(DATA_DIR, "alerts.json");
 const META_FILE = join(DATA_DIR, "meta.json");
 const AUTH_FILE = join(DATA_DIR, "authorizations.json");
 const LOGINS_FILE = join(DATA_DIR, "logins.json");
+const USERS_FILE = join(DATA_DIR, "users.json");
+
+const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+function hashPassword(password: string, salt: string): string {
+  return scryptSync(password, Buffer.from(salt, "hex"), 64, SCRYPT).toString("hex");
+}
+// Used when an email has no account, so a wrong email takes as long as a wrong password.
+const DUMMY_SALT = randomBytes(16).toString("hex");
 
 /** Writes JSON atomically: a crash mid-write can never leave a half-written file. */
 function writeJson(path: string, data: unknown, pretty = true): void {
@@ -85,6 +113,13 @@ function persist(assets: Asset[]): void {
   writeJson(FILE, assets);
 }
 
+function loadUsers(): User[] {
+  return readJson<User[]>(USERS_FILE, []);
+}
+function persistUsers(users: User[]): void {
+  writeJson(USERS_FILE, users);
+}
+
 function loadAlerts(): Alert[] {
   return readJson<Alert[]>(ALERTS_FILE, []);
 }
@@ -107,19 +142,65 @@ export const store = {
     scanning.delete(id);
   },
 
-  list(): Asset[] {
-    return load().sort((a, b) => (b.lastScanAt ?? b.createdAt).localeCompare(a.lastScanAt ?? a.createdAt));
+  /* ---------- accounts ---------- */
+
+  userByEmail(email: string): User | undefined {
+    const e = email.trim().toLowerCase();
+    return loadUsers().find((u) => u.email === e);
+  },
+  user(id: string): User | undefined {
+    return loadUsers().find((u) => u.id === id);
+  },
+  listUsers(): User[] {
+    return loadUsers().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+  createUser(input: { email: string; name: string; password: string }): User {
+    const users = loadUsers();
+    const email = input.email.trim().toLowerCase();
+    if (users.some((u) => u.email === email)) throw new Error("exists");
+    const salt = randomBytes(16).toString("hex");
+    const user: User = { id: randomUUID(), email, name: input.name.trim().slice(0, 80), salt, hash: hashPassword(input.password, salt), createdAt: new Date().toISOString(), lastLoginAt: null, scans: 0 };
+    users.push(user);
+    persistUsers(users);
+    return user;
+  },
+  /** The account for this email and password, or undefined. Same work either way. */
+  checkPassword(email: string, password: string): User | undefined {
+    const u = this.userByEmail(email);
+    const got = Buffer.from(hashPassword(password, u?.salt ?? DUMMY_SALT), "hex");
+    const want = Buffer.from(u?.hash ?? "00".repeat(64), "hex");
+    return u && got.length === want.length && timingSafeEqual(got, want) ? u : undefined;
+  },
+  touchLogin(id: string): void {
+    const users = loadUsers();
+    const u = users.find((x) => x.id === id);
+    if (u) { u.lastLoginAt = new Date().toISOString(); persistUsers(users); }
+  },
+  /** Assets and alerts from before accounts existed go to the admin. */
+  claimUnowned(ownerId: string): void {
+    const assets = load();
+    if (assets.some((a) => !a.ownerId)) persist(assets.map((a) => (a.ownerId ? a : { ...a, ownerId })));
+    const alerts = loadAlerts();
+    if (alerts.some((a) => !a.ownerId)) persistAlerts(alerts.map((a) => (a.ownerId ? a : { ...a, ownerId })));
+  },
+
+  /* ---------- assets ---------- */
+
+  /** Every asset (monitor and admin), or only one account's. */
+  list(ownerId?: string): Asset[] {
+    return load().filter((a) => ownerId === undefined || a.ownerId === ownerId).sort((a, b) => (b.lastScanAt ?? b.createdAt).localeCompare(a.lastScanAt ?? a.createdAt));
   },
 
   get(id: string): Asset | undefined {
     return load().find((a) => a.id === id);
   },
 
-  add(input: { name: string; kind: AssetKind; target: string; authorized: boolean }): Asset {
+  add(input: { ownerId: string; name: string; kind: AssetKind; target: string; authorized: boolean }): Asset {
     const assets = load();
     const web = input.kind === "web";
     const asset: Asset = {
       id: randomUUID(),
+      ownerId: input.ownerId,
       name: input.name,
       kind: input.kind,
       target: input.target,
@@ -170,6 +251,11 @@ export const store = {
     const meta = loadMeta();
     meta.scans++;
     persistMeta(meta);
+    if (asset.ownerId) {
+      const users = loadUsers();
+      const u = users.find((x) => x.id === asset.ownerId);
+      if (u) { u.scans = (u.scans ?? 0) + 1; persistUsers(users); }
+    }
     return asset;
   },
 
@@ -194,20 +280,20 @@ export const store = {
     return alert;
   },
 
-  listAlerts(): Alert[] {
-    return loadAlerts();
+  listAlerts(ownerId?: string): Alert[] {
+    return loadAlerts().filter((a) => ownerId === undefined || a.ownerId === ownerId);
   },
 
-  unreadAlerts(): number {
-    return loadAlerts().filter((a) => !a.read).length;
+  unreadAlerts(ownerId: string): number {
+    return this.listAlerts(ownerId).filter((a) => !a.read).length;
   },
 
-  markAlertsRead(): void {
-    persistAlerts(loadAlerts().map((a) => ({ ...a, read: true })));
+  markAlertsRead(ownerId: string): void {
+    persistAlerts(loadAlerts().map((a) => (a.ownerId === ownerId ? { ...a, read: true } : a)));
   },
 
   /** Audit record: the operator gave explicit authorization to test a target. */
-  logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string; reference?: string }): void {
+  logAuthorization(entry: { assetId: string; name: string; kind: string; target: string; ip: string; userId?: string; email?: string; reference?: string }): void {
     const list = readJson<any[]>(AUTH_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(AUTH_FILE, list.slice(0, 1000));
@@ -219,7 +305,7 @@ export const store = {
   },
 
   /** Sign-in history for the admin view. Never stores passwords. */
-  logLogin(entry: { ip: string; role: "admin" | "user"; ok: boolean }): void {
+  logLogin(entry: { ip: string; email: string; event: "login" | "signup"; ok: boolean }): void {
     const list = readJson<any[]>(LOGINS_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(LOGINS_FILE, list.slice(0, 500));

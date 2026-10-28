@@ -20,8 +20,7 @@ ENV LUCENT_DATA_DIR=/data
 ENV PORT=4600
 EXPOSE 4600
 
-# Set LUCENT_PASSWORD in the environment to require a login.
-# Optional: LUCENT_GITHUB_TOKEN to scan private GitHub repos (white box).
+# People create accounts in the app. Set LUCENT_ADMIN_EMAIL + LUCENT_ADMIN_PASSWORD for the admin account.
+# Optional: LUCENT_GITHUB_TOKEN so the admin can scan private GitHub repos (white box).
 # Optional: LUCENT_ALERT_WEBHOOK to mirror alerts to Slack/Discord.
-# Optional: LUCENT_ADMIN_EMAIL + LUCENT_ADMIN_PASSWORD to turn on the admin sign-in.
 CMD ["npm", "start"]

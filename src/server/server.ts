@@ -1,7 +1,7 @@
 // Lucent Shield web app — serves the dashboard and the API.
-// Protected by a password (LUCENT_PASSWORD). An admin signs in with the email
-// and password set in LUCENT_ADMIN_EMAIL and LUCENT_ADMIN_PASSWORD, and gets
-// the admin view (audit trail, sign-ins, every asset, server health).
+// People create an account (email and password) and each account sees only
+// its own assets. The account whose email is LUCENT_ADMIN_EMAIL is the admin
+// and also gets the admin view (users, audit trail, sign-ins, server health).
 // Start:  npm run web      then open http://localhost:4600
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -9,34 +9,50 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolveTxt } from "node:dns/promises";
-import { store } from "./store.ts";
+import { store, publicUser, type User } from "./store.ts";
+import { ADMIN_EMAIL, ADMIN_PASSWORD, isAdminUser, scanOptionsFor } from "./access.ts";
 import { startMonitor } from "./monitor.ts";
-import { runScan, VERSION, type AssetKind } from "../engine.ts";
+import { runScan, isGitUrl, VERSION, type AssetKind } from "../engine.ts";
 import { classify } from "../catalog.ts";
 import { toHtml, toMarkdown, toJson, type ReportContext } from "../report.ts";
 import { sortFindings, type Finding, type ScanResult } from "../types.ts";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
 const PORT = Number(process.env.PORT) || 4600;
-const PASSWORD = (process.env.LUCENT_PASSWORD ?? "").trim();
-const HTTPS = process.env.LUCENT_PUBLIC_URL?.startsWith("https://") || process.env.TRUST_PROXY === "1";
-
-const ADMIN_EMAIL = (process.env.LUCENT_ADMIN_EMAIL ?? "").trim().toLowerCase();
-const ADMIN_PASSWORD = (process.env.LUCENT_ADMIN_PASSWORD ?? "").trim();
-const ADMIN_ON = !!(ADMIN_EMAIL && ADMIN_PASSWORD);
-const LOGIN_REQUIRED = !!PASSWORD || ADMIN_ON;
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+const HTTPS = process.env.LUCENT_PUBLIC_URL?.startsWith("https://") || TRUST_PROXY;
+/** LUCENT_SIGNUPS=closed stops new accounts (the admin can still create theirs). */
+const SIGNUPS_OPEN = (process.env.LUCENT_SIGNUPS ?? "open").trim().toLowerCase() !== "closed";
 const STARTED = Date.now();
+const MIN_PASSWORD = 10;
 
-// Sessions: token -> expiry (ms) and role. Expired tokens are dropped on use.
+// Sessions: token -> account and expiry (ms). Expired tokens are dropped on use.
 const SESSION_MS = 24 * 60 * 60 * 1000;
-const sessions = new Map<string, { expiry: number; admin: boolean }>();
+const sessions = new Map<string, { userId: string; expiry: number }>();
+
+// New accounts per address: at most 5 an hour, to stop mass sign-ups.
+const signups = new Map<string, number[]>();
+function signupAllowed(ip: string): boolean {
+  const hour = Date.now() - 3_600_000;
+  const recent = (signups.get(ip) ?? []).filter((t) => t > hour);
+  if (recent.length >= 5) return false;
+  recent.push(Date.now());
+  signups.set(ip, recent);
+  return true;
+}
 
 // Login throttle: per-client-IP failed-attempt tracking, to blunt brute force.
 const LOGIN_MAX_FAILS = 8;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const loginFails = new Map<string, { fails: number; until: number }>();
 
+/** The visitor's address. Behind Bash Cloud's proxy (TRUST_PROXY=1) it is the
+ *  last address the proxy added to X-Forwarded-For, which a visitor cannot forge. */
 function clientIp(req: IncomingMessage): string {
+  if (TRUST_PROXY) {
+    const fwd = String(req.headers["x-forwarded-for"] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (fwd.length) return fwd[fwd.length - 1].slice(0, 64);
+  }
   return req.socket.remoteAddress ?? "unknown";
 }
 function loginLockedFor(ip: string): number {
@@ -78,26 +94,35 @@ function cookies(req: IncomingMessage): Record<string, string> {
   return out;
 }
 
-function session(req: IncomingMessage): { expiry: number; admin: boolean } | null {
+/** The signed-in account, or null. */
+function currentUser(req: IncomingMessage): User | null {
   const token = cookies(req)["ls"];
   if (!token) return null;
   const s = sessions.get(token);
   if (!s) return null;
   if (s.expiry < Date.now()) { sessions.delete(token); return null; } // expired
-  return s;
+  const user = store.user(s.userId);
+  if (!user) { sessions.delete(token); return null; }
+  return user;
 }
 
-function authed(req: IncomingMessage): boolean {
-  if (!LOGIN_REQUIRED) return true; // open in local/dev mode
-  return !!session(req);
+function startSession(res: ServerResponse, user: User, body: unknown) {
+  const token = randomBytes(24).toString("hex");
+  sessions.set(token, { userId: user.id, expiry: Date.now() + SESSION_MS });
+  store.touchLogin(user.id);
+  if (isAdminUser(user)) store.claimUnowned(user.id);
+  return json(res, 200, body, { "Set-Cookie": `ls=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${HTTPS ? "; Secure" : ""}` });
 }
 
-/** Admin when signed in with the admin email. With no login set up at all
- *  (local development) the single local operator is the admin. */
-function isAdmin(req: IncomingMessage): boolean {
-  if (!LOGIN_REQUIRED) return true;
-  return !!session(req)?.admin;
+/** Constant-time comparison; an unset secret never matches. */
+function sameSecret(input: string, secret: string): boolean {
+  if (!secret) return false;
+  const h = (x: string) => createHash("sha256").update(x).digest();
+  return timingSafeEqual(h(input), h(secret));
 }
+
+const me = (u: User) => ({ ...publicUser(u), admin: isAdminUser(u) });
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,24}$/i;
 
 function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
   const data = JSON.stringify(body);
@@ -167,13 +192,6 @@ async function verifyDomain(target: string, token: string): Promise<{ ok: boolea
   return { ok: false };
 }
 
-function same(input: string, secret: string): boolean {
-  if (!secret) return false;
-  const a = createHash("sha256").update(input).digest();
-  const b = createHash("sha256").update(secret).digest();
-  return timingSafeEqual(a, b);
-}
-const passwordOk = (input: string) => same(input, PASSWORD);
 
 /** Everything the admin view shows, built from the stored data. */
 function adminOverview() {
@@ -187,17 +205,20 @@ function adminOverview() {
     for (const k of Object.keys(sev) as (keyof typeof sev)[]) sev[k] += a.counts?.[k] ?? 0;
   }
   const logins = store.listLogins(100);
+  const users = store.listUsers();
   const dayAgo = Date.now() - 86_400_000;
   const mem = process.memoryUsage();
   return {
     totals: {
+      users: users.length,
       assets: assets.length, byKind, byShield, severity: sev,
       scans: store.scanCount(),
       monitored: assets.filter((a) => a.monitor).length,
       webUnverified: assets.filter((a) => a.kind === "web" && !a.verified).length,
       failedLogins24h: logins.filter((l) => !l.ok && new Date(l.at).getTime() > dayAgo).length,
     },
-    assets: assets.map(({ findings, verifyToken, ...a }) => a),
+    users: users.map((u) => ({ ...publicUser(u), admin: isAdminUser(u), assets: assets.filter((a) => a.ownerId === u.id).length })),
+    assets: assets.map(({ findings, verifyToken, ...a }) => ({ ...a, owner: users.find((u) => u.id === a.ownerId)?.email ?? null })),
     authorizations: store.listAuthorizations(200),
     logins,
     alerts: store.listAlerts().slice(0, 50),
@@ -207,8 +228,8 @@ function adminOverview() {
       memoryMb: Math.round(mem.rss / 1e6),
       activeSessions: [...sessions.values()].filter((s) => s.expiry > Date.now()).length,
       settings: {
-        password: !!PASSWORD,
-        admin: ADMIN_ON,
+        signupsOpen: SIGNUPS_OPEN,
+        adminEmail: !!ADMIN_EMAIL,
         httpsCookies: !!HTTPS,
         githubToken: !!process.env.LUCENT_GITHUB_TOKEN,
         alertWebhook: !!process.env.LUCENT_ALERT_WEBHOOK,
@@ -218,11 +239,49 @@ function adminOverview() {
   };
 }
 
+/** If an Origin or Referer is present, it must be this site (CSRF defence). */
+function sameSite(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  const check = (u?: string) => { if (!u) return undefined; try { return new URL(u).host === host; } catch { return false; } };
+  const okOrigin = check(req.headers.origin);
+  const okReferer = check(req.headers.referer);
+  return !(okOrigin === false || (okOrigin === undefined && okReferer === false));
+}
+
 async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   const method = req.method ?? "GET";
 
   if (path === "/api/auth" && method === "GET") {
-    return json(res, 200, { required: LOGIN_REQUIRED, authed: authed(req), admin: authed(req) && isAdmin(req), adminLogin: ADMIN_ON, version: VERSION });
+    const u = currentUser(req);
+    return json(res, 200, { authed: !!u, user: u ? me(u) : null, signups: SIGNUPS_OPEN, version: VERSION });
+  }
+
+  // Login and sign-up come from our own page only (same check as below).
+  if ((path === "/api/login" || path === "/api/signup") && method === "POST" && !sameSite(req)) return json(res, 403, { error: "Blocked." });
+
+  if (path === "/api/signup" && method === "POST") {
+    const ip = clientIp(req);
+    const body = await readBody(req);
+    const name = String(body.name ?? "").trim();
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const password = String(body.password ?? "");
+    if (!name) return json(res, 400, { error: "Enter your name." });
+    if (!EMAIL_RE.test(email) || email.length > 254) return json(res, 400, { error: "Enter a valid email address." });
+    if (password.length < MIN_PASSWORD) return json(res, 400, { error: `Use a password of at least ${MIN_PASSWORD} characters.` });
+    if (password.length > 200) return json(res, 400, { error: "That password is too long." });
+    // The admin email is reserved: only someone who knows LUCENT_ADMIN_PASSWORD can claim it.
+    const adminSignup = !!ADMIN_EMAIL && email === ADMIN_EMAIL;
+    if (adminSignup && !sameSecret(password, ADMIN_PASSWORD)) {
+      store.logLogin({ ip, email, event: "signup", ok: false });
+      return json(res, 403, { error: "This email cannot be used to create an account." });
+    }
+    if (!adminSignup && !SIGNUPS_OPEN) return json(res, 403, { error: "New accounts are closed for now." });
+    if (!signupAllowed(ip)) return json(res, 429, { error: "Too many new accounts from your network. Try again later." });
+    let user: User;
+    try { user = store.createUser({ email, name, password }); }
+    catch { return json(res, 409, { error: "An account with this email already exists. Log in instead." }); }
+    store.logLogin({ ip, email, event: "signup", ok: true });
+    return startSession(res, user, { ok: true, user: me(user) });
   }
 
   if (path === "/api/login" && method === "POST") {
@@ -230,24 +289,20 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const lockedFor = loginLockedFor(ip);
     if (lockedFor > 0) return json(res, 429, { error: `Too many attempts. Try again in ${Math.ceil(lockedFor / 60)} min.` });
     const body = await readBody(req);
-    const email = String(body.email ?? "").trim().toLowerCase();
-    const password = String(body.password ?? "");
-    // With an email, only the admin credentials are accepted; without one, the
-    // shared dashboard password. Both comparisons run in constant time.
-    const asAdmin = !!email;
-    const ok = asAdmin ? ADMIN_ON && same(email, ADMIN_EMAIL) && same(password, ADMIN_PASSWORD) : passwordOk(password);
-    store.logLogin({ ip, role: asAdmin ? "admin" : "user", ok });
-    if (!ok) {
+    const email = String(body.email ?? "").trim().toLowerCase().slice(0, 254);
+    const user = store.checkPassword(email, String(body.password ?? "").slice(0, 200));
+    store.logLogin({ ip, email, event: "login", ok: !!user });
+    if (!user) {
       noteLoginFail(ip);
-      return json(res, 401, { error: asAdmin ? "Wrong email or password." : "Wrong password." });
+      return json(res, 401, { error: "Wrong email or password." });
     }
     clearLoginFails(ip);
-    const token = randomBytes(24).toString("hex");
-    sessions.set(token, { expiry: Date.now() + SESSION_MS, admin: asAdmin });
-    return json(res, 200, { ok: true }, { "Set-Cookie": `ls=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${HTTPS ? "; Secure" : ""}` });
+    return startSession(res, user, { ok: true, user: me(user) });
   }
 
-  if (!authed(req)) return json(res, 401, { error: "Please log in." });
+  const user = currentUser(req);
+  if (!user) return json(res, 401, { error: "Please log in." });
+  const admin = isAdminUser(user);
 
   if (path === "/api/logout" && method === "POST") {
     const token = cookies(req)["ls"];
@@ -257,18 +312,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
 
   // State-changing requests must come from our own page (CSRF defence, on top
   // of the SameSite=Lax session cookie). Check Origin, and fall back to Referer.
-  if (method !== "GET") {
-    const host = req.headers.host;
-    const origin = req.headers.origin;
-    const referer = req.headers.referer;
-    const sameHost = (u?: string) => { if (!u) return undefined; try { return new URL(u).host === host; } catch { return false; } };
-    const okOrigin = sameHost(origin);
-    const okReferer = sameHost(referer);
-    // If an Origin or Referer is present, it must match our host.
-    if (okOrigin === false || (okOrigin === undefined && okReferer === false)) {
-      return json(res, 403, { error: "Blocked." });
-    }
-  }
+  if (method !== "GET" && !sameSite(req)) return json(res, 403, { error: "Blocked." });
 
   // Favicon proxy: fetches the target site's icon server-side so the browser can
   // show it (CSP only allows same-origin images). Cached by the browser for a day.
@@ -296,7 +340,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
 
   // Admin only. Read-only views; nothing here changes stored data.
   if (path.startsWith("/api/admin/")) {
-    if (!isAdmin(req)) return json(res, 403, { error: "Admins only." });
+    if (!admin) return json(res, 403, { error: "Admins only." });
     if (path === "/api/admin/overview" && method === "GET") return json(res, 200, adminOverview());
     if (path === "/api/admin/audit.json" && method === "GET") {
       return json(res, 200, store.listAuthorizations(), { "Content-Disposition": `attachment; filename="lucent-authorizations-${new Date().toISOString().slice(0, 10)}.json"` });
@@ -305,15 +349,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   }
 
   if (path === "/api/alerts" && method === "GET") {
-    return json(res, 200, { alerts: store.listAlerts(), unread: store.unreadAlerts() });
+    return json(res, 200, { alerts: store.listAlerts(user.id), unread: store.unreadAlerts(user.id) });
   }
   if (path === "/api/alerts/read-all" && method === "POST") {
-    store.markAlertsRead();
+    store.markAlertsRead(user.id);
     return json(res, 200, { ok: true });
   }
 
   if (path === "/api/assets" && method === "GET") {
-    return json(res, 200, { assets: store.list().map(({ findings, ...a }) => a), unread: store.unreadAlerts(), totalScans: store.scanCount() });
+    return json(res, 200, { assets: store.list(user.id).map(({ findings, ...a }) => a), unread: store.unreadAlerts(user.id), totalScans: user.scans ?? 0 });
   }
 
   if (path === "/api/assets" && method === "POST") {
@@ -325,7 +369,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     if ((kind === "web") && body.authorized !== true) {
       return json(res, 400, { error: "Confirm you own or are authorised to test this site before adding it." });
     }
-    const asset = store.add({ name, kind, target, authorized: kind === "web" ? true : !!body.authorized });
+    // Folders and files on this server are the admin's only: anyone else could read the server itself.
+    if (!admin && kind === "artifact") return json(res, 403, { error: "Forensic examination is not available on your account." });
+    if (!admin && kind === "repo" && !(isGitUrl(target) && /^https:\/\//i.test(target))) {
+      return json(res, 400, { error: "Enter the repository's web address, for example https://github.com/you/your-repo." });
+    }
+    const asset = store.add({ ownerId: user.id, name, kind, target, authorized: kind === "web" ? true : !!body.authorized });
     const { findings, ...rest } = asset;
     return json(res, 200, { asset: rest });
   }
@@ -334,7 +383,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   if (idMatch) {
     const id = idMatch[1];
     const asset = store.get(id);
-    if (!asset) return json(res, 404, { error: "Not found." });
+    // Another account's asset looks exactly like one that does not exist.
+    if (!asset || asset.ownerId !== user.id) return json(res, 404, { error: "Not found." });
 
     if (idMatch[2] === "/verify" && method === "POST") {
       if (asset.kind !== "web") return json(res, 400, { error: "Only websites need ownership verification." });
@@ -362,8 +412,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       }
       if (!store.beginScan(id)) return json(res, 409, { error: "This asset is already being scanned. Wait for it to finish." });
       try {
-        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), reference: String(body.reference ?? "").trim() || undefined });
-        const result = await runScan(asset.kind, asset.target);
+        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: String(body.reference ?? "").trim().slice(0, 200) || undefined });
+        const result = await runScan(asset.kind, asset.target, scanOptionsFor(asset.ownerId));
         const updated = store.saveScan(id, result);
         return json(res, 200, { asset: updated });
       } finally {
@@ -437,8 +487,8 @@ server.headersTimeout = 65_000;
 
 server.listen(PORT, () => {
   console.log(`Lucent Shield v${VERSION} running on http://localhost:${PORT}`);
-  if (!LOGIN_REQUIRED) console.log("  (no LUCENT_PASSWORD set, so it runs in open mode, for local use only)");
-  if (ADMIN_ON) console.log("  admin sign-in is on");
-  else if (ADMIN_EMAIL || ADMIN_PASSWORD) console.log("  admin sign-in is off: set both LUCENT_ADMIN_EMAIL and LUCENT_ADMIN_PASSWORD");
+  if (!ADMIN_EMAIL) console.log("  no admin yet: set LUCENT_ADMIN_EMAIL (and LUCENT_ADMIN_PASSWORD to create that account)");
+  else console.log(store.userByEmail(ADMIN_EMAIL) ? "  admin account ready" : "  admin account not created yet: sign up with the admin email and LUCENT_ADMIN_PASSWORD");
+  if (!SIGNUPS_OPEN) console.log("  new sign-ups are closed (LUCENT_SIGNUPS=closed)");
   startMonitor();
 });

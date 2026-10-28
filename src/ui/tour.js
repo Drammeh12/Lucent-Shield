@@ -65,6 +65,25 @@
         },
       },
       {
+        title: "Secure it with your phone",
+        pose: "point",
+        say: "Straight after creating your account, you secure it with your phone. Install Google Authenticator from the Play Store on Android, or the App Store on iPhone. Open it, tap plus, and scan the QR code on your screen. Type the six-digit code it shows, and save your recovery codes. From then on, logging in needs your password and that code.",
+
+        async build(screen, api) {
+          const on = btn("Activate");
+          screen.append(bar("Settings"), body(el("div", { class: "ls-h", text: "Turn on your authenticator" }), el("p", { class: "ls-p", text: "1. Install Google Authenticator  2. Tap +  3. Scan the code  4. Type the 6 digits" }), on));
+          await api.wait(1100);
+          await api.tap(on);
+          const code = el("div", { class: "ls-code" }, ..."482913".split("").map(() => el("span")));
+          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-qr" }, el("div"))), hidden(code));
+          await api.reveal(screen.querySelector(".ls-qr"));
+          await api.reveal(code);
+          for (const [i, d] of [..."482913"].entries()) { code.children[i].textContent = d; await api.wait(140); }
+          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-toast", text: "✓ Account secured" })));
+          await api.reveal(screen.querySelector(".ls-toast"));
+        },
+      },
+      {
         title: "Your dashboard",
         pose: "point",
         say: "This is your dashboard. At the top: how many assets you have, how many are protected, how many are exposed with serious problems, and how many scans you have run. An asset is simply something you protect: your code, or your website.",
@@ -111,13 +130,14 @@
       {
         title: "Prove you own the website",
         pose: "think",
-        say: "For a website, you prove you own it once, so nobody can use Lucent Shield to scan someone else's site. Pick one way. Upload a small file we give you to your website, or add a short text record in your domain's DNS settings. Use whichever one you can reach, then press Verify.",
+        say: "For a website, you prove you own it once, so nobody can use Lucent Shield to scan someone else's site. Pick one way. Upload a small file we give you to your website, or add a short text record in your domain's DNS settings. Not technical? Choose Ask our team, and a person will check it with you. You can also email the steps to your developer.",
         async build(screen, api) {
           const file = el("div", { class: "on" }, el("b", { text: "Upload a file" }), "Change your site's files");
           const dns = el("div", {}, el("b", { text: "Add a DNS record" }), "Change domain settings");
+          const ask = el("div", {}, el("b", { text: "Ask our team" }), "A person checks it");
           const how = el("div", { class: "ls-mono", text: "myshop.ng/.well-known/lucent-verify.txt" });
           const verify = btn("Verify ownership");
-          screen.append(bar("Verify myshop.ng"), body(el("div", { class: "ls-seg" }, file, dns), btn("Download lucent-verify.txt", "ghost"), how, verify));
+          screen.append(bar("Verify myshop.ng"), body(el("div", { class: "ls-seg three" }, file, dns, ask), btn("Download lucent-verify.txt", "ghost"), how, verify));
           await api.wait(1200);
           await api.tap(dns); dns.classList.add("on"); file.classList.remove("on");
           how.textContent = "TXT  @  lucent-verify=7f3a…";
@@ -214,27 +234,9 @@
         },
       },
       {
-        title: "Lock your account",
-        pose: "point",
-        say: "Finally, go to Settings and turn on two-step login. Scan the QR code with Google Authenticator or a similar app, and type the six-digit code. From then on, logging in needs your password and a code from your phone. Keep the recovery codes somewhere safe.",
-        async build(screen, api) {
-          const on = btn("Turn on two-step login");
-          screen.append(bar("Settings"), body(el("div", { class: "ls-h", text: "Two-step login" }), el("p", { class: "ls-p", text: "A code from your phone as well as your password." }), on));
-          await api.wait(1100);
-          await api.tap(on);
-          const code = el("div", { class: "ls-code" }, ..."482913".split("").map(() => el("span")));
-          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-qr" }, el("div"))), hidden(code));
-          await api.reveal(screen.querySelector(".ls-qr"));
-          await api.reveal(code);
-          for (const [i, d] of [..."482913"].entries()) { code.children[i].textContent = d; await api.wait(140); }
-          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-toast", text: "✓ Two-step login is on" })));
-          await api.reveal(screen.querySelector(".ls-toast"));
-        },
-      },
-      {
         title: "You're ready",
         pose: "cheer",
-        say: "That's everything: choose a scan, give permission, prove ownership for websites, read the fixes, then press Protect. You can watch this video again any time from the top of your dashboard. Stay safe out there!",
+        say: "That's everything: secure your account with your phone, choose a scan, give permission, prove ownership for websites, read the fixes, then press Protect. You can watch this video again any time from the top of your dashboard. Stay safe out there!",
         async build(screen, api) {
           const hero = el("div", { class: "ls-hero" }, lock("green closed"), el("h3", { text: "You're protected" }), el("p", { text: "Scan · Detect · Secure" }));
           screen.append(hero);

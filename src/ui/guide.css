@@ -172,3 +172,4 @@ body.g-lock { overflow: hidden; }
 .ls-lock .orb i:nth-child(1) { left: 56px; top: -10px; } .ls-lock .orb i:nth-child(2) { right: -10px; top: 56px; }
 .ls-lock .orb i:nth-child(3) { left: 56px; bottom: -10px; } .ls-lock .orb i:nth-child(4) { left: -10px; top: 56px; }
 .ls-lock svg { width: 82px; height: 92px; }
+.ls-seg.three { grid-template-columns: 1fr 1fr 1fr; } .ls-seg.three div { font-size: 8.5px; } .ls-seg.three div b { font-size: 9.5px; }

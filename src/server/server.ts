@@ -27,6 +27,9 @@ const HTTPS = process.env.LUCENT_PUBLIC_URL?.startsWith("https://") || TRUST_PRO
 const SIGNUPS_OPEN = (process.env.LUCENT_SIGNUPS ?? "open").trim().toLowerCase() !== "closed";
 const STARTED = Date.now();
 const MIN_PASSWORD = 10;
+/** Every account must set up an authenticator app before using Lucent Shield.
+ *  LUCENT_REQUIRE_2FA=0 makes it optional (local development only). */
+const REQUIRE_2FA = (process.env.LUCENT_REQUIRE_2FA ?? "1").trim() !== "0";
 
 // Sessions: token -> account and expiry (ms). Expired tokens are dropped on use.
 const SESSION_MS = 24 * 60 * 60 * 1000;
@@ -255,8 +258,10 @@ function adminOverview() {
       webUnverified: assets.filter((a) => a.kind === "web" && !a.verified).length,
       failedLogins24h: logins.filter((l) => !l.ok && new Date(l.at).getTime() > dayAgo).length,
     },
+    verifyRequests: assets.filter((a) => a.kind === "web" && !a.verified && a.verifyRequest?.status === "pending")
+      .map((a) => ({ id: a.id, name: a.name, target: a.target, owner: users.find((u) => u.id === a.ownerId)?.email ?? null, ...a.verifyRequest })),
     users: users.map((u) => ({ ...publicUser(u), admin: isAdminUser(u), assets: assets.filter((a) => a.ownerId === u.id).length })),
-    assets: assets.map(({ findings, verifyToken, ...a }) => ({ ...a, owner: users.find((u) => u.id === a.ownerId)?.email ?? null })),
+    assets: assets.map(({ findings, verifyToken, verifyRequest, ...a }) => ({ ...a, owner: users.find((u) => u.id === a.ownerId)?.email ?? null })),
     authorizations: store.listAuthorizations(200),
     logins,
     alerts: store.listAlerts().slice(0, 50),
@@ -291,7 +296,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
 
   if (path === "/api/auth" && method === "GET") {
     const u = currentUser(req);
-    return json(res, 200, { authed: !!u, user: u ? me(u) : null, signups: SIGNUPS_OPEN, version: VERSION });
+    return json(res, 200, { authed: !!u, user: u ? me(u) : null, signups: SIGNUPS_OPEN, twoStepRequired: REQUIRE_2FA, version: VERSION });
   }
 
   // Login and sign-up come from our own page only (same check as below).
@@ -405,14 +410,14 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
   }
 
-  // Two-step login for your own account. Turning it on or off needs your password.
+  // Two-step login for your own account. Setting it up is the first thing a new
+  // account does; moving it to a new phone needs the password and a current code.
   if (path.startsWith("/api/account/2fa/") && method === "POST") {
     if (!twoStepAllowed(user.id)) return json(res, 429, { error: "Too many attempts. Try again later." });
     const body = await readBody(req);
     const ip = clientIp(req);
     if (path === "/api/account/2fa/start") {
       if (user.totp) return json(res, 400, { error: "Two-step login is already on." });
-      if (!store.checkPassword(user.email, String(body.password ?? "").slice(0, 200))) return json(res, 400, { error: "Your password is not right." });
       const secret = newTotpSecret();
       store.setTotpPending(user.id, secret);
       return json(res, 200, { ok: true, secret, uri: otpauthUri(secret, user.email) });
@@ -439,9 +444,25 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 404, { error: "Unknown endpoint." });
   }
 
-  // Admin only. Read-only views; nothing here changes stored data.
+  // Nothing else works until the account's authenticator app is set up.
+  if (REQUIRE_2FA && !user.totp) return json(res, 403, { error: "Set up your authenticator app first.", code: "2fa_required" });
+
+  // Admin only.
   if (path.startsWith("/api/admin/")) {
     if (!admin) return json(res, 403, { error: "Admins only." });
+    // Ownership reviewed by a person: approve or decline a request.
+    const vr = path.match(/^\/api\/admin\/verify\/([0-9a-f-]{36})$/);
+    if (vr && method === "POST") {
+      const a = store.get(vr[1]);
+      if (!a || a.kind !== "web" || !a.verifyRequest) return json(res, 404, { error: "No request for that asset." });
+      const body = await readBody(req);
+      const approve = body.approve === true;
+      const reason = String(body.reason ?? "").trim().slice(0, 300);
+      store.reviewVerifyRequest(a.id, approve, reason, user.email);
+      if (a.ownerId) store.addEvent({ ownerId: a.ownerId, assetId: a.id, assetName: a.name, type: approve ? "verified" : "added", text: approve ? `Ownership of ${a.name} confirmed by the Lucent Shield team` : `Ownership of ${a.name} could not be confirmed${reason ? `: ${reason}` : ""}` });
+      store.logAuthorization({ assetId: a.id, name: a.name, kind: a.kind, target: a.target, ip: clientIp(req), userId: user.id, email: user.email, reference: approve ? "Ownership approved on manual review" : "Ownership declined on manual review" });
+      return json(res, 200, { ok: true });
+    }
     if (path === "/api/admin/overview" && method === "GET") return json(res, 200, adminOverview());
     if (path === "/api/admin/audit.json" && method === "GET") {
       return json(res, 200, store.listAuthorizations(), { "Content-Disposition": `attachment; filename="lucent-authorizations-${new Date().toISOString().slice(0, 10)}.json"` });
@@ -485,12 +506,26 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 200, { asset: rest });
   }
 
-  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor|\/verify|\/report)?$/);
+  const idMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(\/scan|\/monitor|\/verify|\/verify-request|\/report)?$/);
   if (idMatch) {
     const id = idMatch[1];
     const asset = store.get(id);
     // Another account's asset looks exactly like one that does not exist.
     if (!asset || asset.ownerId !== user.id) return json(res, 404, { error: "Not found." });
+
+    // For owners who cannot change files or DNS: ask a person at Lucent Shield to confirm.
+    if (idMatch[2] === "/verify-request" && method === "POST") {
+      if (asset.kind !== "web") return json(res, 400, { error: "Only websites need ownership verification." });
+      if (asset.verified) return json(res, 200, { verified: true });
+      const body = await readBody(req);
+      const note = String(body.note ?? "").trim().slice(0, 1000);
+      const contact = String(body.contact ?? "").trim().slice(0, 200);
+      if (note.length < 15) return json(res, 400, { error: "Tell us a little about how you are connected to this website." });
+      if (!contact) return json(res, 400, { error: "Give a phone number or email we can reach you on." });
+      store.setVerifyRequest(asset.id, { note, contact });
+      store.addEvent({ ownerId: user.id, assetId: asset.id, assetName: asset.name, type: "added", text: `Asked the Lucent Shield team to confirm ownership of ${asset.name}` });
+      return json(res, 200, { ok: true, pending: true });
+    }
 
     if (idMatch[2] === "/verify" && method === "POST") {
       if (asset.kind !== "web") return json(res, 400, { error: "Only websites need ownership verification." });

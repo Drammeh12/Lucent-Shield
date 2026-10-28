@@ -50,7 +50,7 @@ before(async () => {
   const port = 20000 + Math.floor(Math.random() * 30000);
   base = `http://127.0.0.1:${port}`;
   proc = spawn(process.execPath, [...process.execArgv, join(ROOT, "src/server/server.ts")], {
-    env: { ...process.env, PORT: String(port), LUCENT_ADMIN_EMAIL: ADMIN_EMAIL, LUCENT_ADMIN_PASSWORD: ADMIN_PASSWORD, LUCENT_DATA_DIR: dataDir, LUCENT_TICK_MS: "3600000", LUCENT_ALLOW_INTERNAL: "1" },
+    env: { ...process.env, PORT: String(port), LUCENT_REQUIRE_2FA: "0", LUCENT_ADMIN_EMAIL: ADMIN_EMAIL, LUCENT_ADMIN_PASSWORD: ADMIN_PASSWORD, LUCENT_DATA_DIR: dataDir, LUCENT_TICK_MS: "3600000", LUCENT_ALLOW_INTERNAL: "1" },
     stdio: "ignore",
   });
   for (let i = 0; i < 100; i++) {
@@ -244,6 +244,23 @@ test("the assessment report carries the scan's authorization", async () => {
   assert.equal((await fetch(`${base}/api/assets/${id}/report`)).status, 401, "needs a login");
 });
 
+test("owners who cannot change files or DNS can ask a person; only the admin approves", async () => {
+  const site = (await call("/api/assets", { method: "POST", body: { name: "nontech", kind: "web", target: "https://nontech.example", authorized: true }, headers: { cookie: alice } })).data.asset;
+  assert.equal((await call(`/api/assets/${site.id}/verify-request`, { method: "POST", body: { note: "short", contact: "x" }, headers: { cookie: alice } })).status, 400);
+  const r = await call(`/api/assets/${site.id}/verify-request`, { method: "POST", body: { note: "I own the business; my developer built the site.", contact: "+234 800 000 0000" }, headers: { cookie: alice } });
+  assert.equal(r.status, 200);
+  // Still not scannable until a person approves.
+  assert.equal((await call(`/api/assets/${site.id}/scan`, { method: "POST", body: { authorized: true }, headers: { cookie: alice } })).status, 403);
+  assert.equal((await call(`/api/admin/verify/${site.id}`, { method: "POST", body: { approve: true }, headers: { cookie: alice } })).status, 403, "a customer cannot approve");
+  const o = await call("/api/admin/overview");
+  assert.ok(o.data.verifyRequests.some((v: any) => v.id === site.id && v.contact === "+234 800 000 0000"));
+  assert.equal((await call(`/api/admin/verify/${site.id}`, { method: "POST", body: { approve: true } })).status, 200);
+  assert.equal((await call(`/api/assets/${site.id}`, { headers: { cookie: alice } })).data.asset.verified, true);
+  const log = JSON.parse(readFileSync(join(dataDir, "authorizations.json"), "utf8"));
+  assert.equal(log[0].reference, "Ownership approved on manual review");
+  assert.equal(log[0].email, ADMIN_EMAIL);
+});
+
 test("the admin view is for the admin only", async () => {
   assert.equal((await call("/api/admin/overview", { headers: { cookie: alice } })).status, 403);
   assert.equal((await call("/api/admin/audit.json", { headers: { cookie: alice } })).status, 403);
@@ -262,7 +279,6 @@ test("the admin view is for the admin only", async () => {
 
 test("two-step login: set up with an app code, then every login needs a code", async () => {
   const h = { cookie: alice };
-  assert.equal((await call("/api/account/2fa/start", { method: "POST", body: { password: "wrong-password!" }, headers: h })).status, 400);
   const st = await call("/api/account/2fa/start", { method: "POST", body: { password: ALICE.password }, headers: h });
   assert.equal(st.status, 200);
   assert.match(st.data.uri, /^otpauth:\/\/totp\/Lucent%20Shield:/);

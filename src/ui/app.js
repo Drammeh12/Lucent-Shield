@@ -16,7 +16,8 @@
   async function api(path, opts = {}) {
     const res = await fetch(path, { method: opts.method || "GET", headers: opts.body ? { "content-type": "application/json" } : {}, body: opts.body ? JSON.stringify(opts.body) : undefined });
     let data = {}; try { data = await res.json(); } catch {}
-    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    if (res.status === 403 && data.code === "2fa_required" && !String(path).startsWith("/api/account/2fa/")) { setTimeout(() => boot(), 0); }
+    if (!res.ok) { const e = new Error(data.error || `Error ${res.status}`); e.code = data.code; throw e; }
     return data;
   }
 
@@ -431,9 +432,10 @@
       m.querySelector("#cbCancel").onclick = () => done(false);
       const b = m.querySelector("#cbGo"), c = m.querySelector("#cbAuth");
       if (c) c.onchange = () => { b.disabled = !c.checked; };
-      b.onclick = () => { if (!b.disabled) done(true); };
+      b.onclick = () => { if (!b.disabled) { LAST_INPUT = m.querySelector("input:not([type=checkbox]), textarea")?.value || ""; done(true); } };
     });
   }
+  let LAST_INPUT = "";
 
   // Explicit, per-run authorization before ANY test (white box, black box or
   // forensics). Required every time, even after the terms were accepted.
@@ -490,7 +492,10 @@
       <div class="vpick" role="radiogroup" aria-label="How to verify">
         <button type="button" role="radio" class="vopt on" data-m="file" aria-checked="true"><b>Upload a file</b><span>Best if you can change your site's files</span></button>
         <button type="button" role="radio" class="vopt" data-m="dns" aria-checked="false"><b>Add a DNS record</b><span>Best if you manage your domain's DNS</span></button>
+        <button type="button" role="radio" class="vopt" data-m="ask" aria-checked="false"><b>Ask our team</b><span>Not technical? A person checks it for you</span></button>
       </div>
+      ${asset.verifyRequest?.status === "pending" ? `<div class="vnote">You asked our team to confirm this site. We will contact you on ${esc(asset.verifyRequest.contact)}. You can still use a method above if it is quicker.</div>` : ""}
+      ${asset.verifyRequest?.status === "declined" ? `<div class="vnote bad">Our team could not confirm this site${asset.verifyRequest.reason ? `: ${esc(asset.verifyRequest.reason)}` : "."} Try the file or DNS method, or ask your developer.</div>` : ""}
       <div class="vpane" data-pane="file">
         <ol class="vsteps">
           <li><div>Download your verification file. It holds your token and nothing else.</div><a class="btn small" href="data:text/plain;charset=utf-8,${encodeURIComponent(tok)}" download="lucent-verify.txt">Download lucent-verify.txt</a></li>
@@ -507,12 +512,33 @@
           <li><div>Save it, wait a few minutes, then press Verify. DNS changes can take up to an hour.</div></li>
         </ol>
       </div>
+      <div class="vpane" data-pane="ask" hidden>
+        <p class="vp">A person on the Lucent Shield team contacts you and checks, with you, that you really own or run <b>${esc(host)}</b>, for example by seeing you log in to its hosting or domain account, or through its official email. Only then can it be scanned. This usually takes one working day.</p>
+        <form id="askForm" class="tsform wide">
+          <label class="lf">How are you connected to this website?<textarea name="note" rows="3" maxlength="1000" placeholder="For example: I own the business, and my developer built the site on Vercel for me."></textarea></label>
+          <label class="lf">Phone number or email we can reach you on<input name="contact" maxlength="200" autocomplete="tel"></label>
+          <button class="btn" type="submit">Send request</button><div class="err" id="askErr" role="alert"></div>
+        </form>
+      </div>
+      <div class="dev" data-dev><a class="ghost small" href="mailto:?subject=${encodeURIComponent(`Please verify ${host} for Lucent Shield`)}&body=${encodeURIComponent(`Hi,\n\nPlease help me prove I own ${host} so Lucent Shield can check its security. Either:\n\n1. Create a file at ${fileUrl} containing only this text:\n${tok}\n\nor\n\n2. Add a DNS TXT record on ${host}: name @, value lucent-verify=${tok}\n\nThen tell me, and I will press Verify.\n\nThank you.`)}">Email these steps to my developer</a></div>
       <div class="arow"><button class="btn" id="vGo">Verify ownership</button></div>
       <div class="vstatus" id="vStatus" role="status"></div>`);
     d.querySelectorAll(".vopt").forEach((b) => b.onclick = () => {
       d.querySelectorAll(".vopt").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", String(x === b)); });
       d.querySelectorAll(".vpane").forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.m; });
+      const ask = b.dataset.m === "ask";
+      d.querySelector("#vGo").hidden = ask; d.querySelector("[data-dev]").hidden = ask;
     });
+    const askF = d.querySelector("#askForm");
+    askF.onsubmit = async (e) => {
+      e.preventDefault();
+      const er = d.querySelector("#askErr"); er.textContent = "";
+      try {
+        await api(`/api/assets/${asset.id}/verify-request`, { method: "POST", body: { note: askF.note.value, contact: askF.contact.value } });
+        askF.outerHTML = `<div class="vstatus ok">Request sent. Our team will contact you, usually within one working day. You will see it in Recent activity when it is confirmed.</div>`;
+        refreshQuiet();
+      } catch (ex) { er.textContent = ex.message; }
+    };
     d.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); } catch { b.textContent = "Select and copy"; }
     });
@@ -680,7 +706,7 @@
         <p>${two ? `On. Logging in needs your password and a code from your authenticator app. ${ME.recoveryLeft} recovery ${ME.recoveryLeft === 1 ? "code" : "codes"} left.` : "Protect your account with a code from an authenticator app (Google Authenticator, Microsoft Authenticator, Authy) as well as your password."}</p></div>
         <span class="tag ${two ? "secure" : "at_risk"}">${two ? "On" : "Off"}</span></div>
       <div id="tsBody">${two
-        ? `<button class="btn ghost-btn" id="tsOffStart" type="button">Turn off</button>`
+        ? `<button class="btn ghost-btn" id="tsOffStart" type="button">Move to a new phone</button>`
         : `<button class="btn" id="tsStart" type="button">Turn on two-step login</button>`}</div>
     </div>`;
   }
@@ -735,14 +761,14 @@
 
     const off = document.getElementById("tsOffStart");
     if (off) off.onclick = () => {
-      body.innerHTML = `<form id="tsOff" class="tsform"><p class="warn">Turning this off makes your account easier to break into.</p>
+      body.innerHTML = `<form id="tsOff" class="tsform"><p class="warn">You will scan a new QR code with your new phone straight after this.</p>
         <label class="lf">Your password<input type="password" name="password" autocomplete="current-password" required></label>
         <label class="lf">Code from your authenticator app<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>
-        <button class="btn danger-btn" type="submit">Turn off two-step login</button>${err()}</form>`;
+        <button class="btn" type="submit">Continue</button>${err()}</form>`;
       const f = document.getElementById("tsOff"); f.password.focus();
       f.onsubmit = async (e) => {
         e.preventDefault();
-        try { const x = await api("/api/account/2fa/disable", { method: "POST", body: { password: f.password.value, code: f.code.value } }); done(x.user); }
+        try { const x = await api("/api/account/2fa/disable", { method: "POST", body: { password: f.password.value, code: f.code.value } }); ME = x.user; boot(); }
         catch (ex) { fail(ex); }
       };
     };
@@ -755,6 +781,20 @@
   function EVENT_LABEL(l) {
     const t = { signup: ["Account created", "Sign-up refused"], login: ["Password accepted", "Refused"], code: ["Logged in with code", "Wrong code"], recovery: ["Used a recovery code", "Wrong recovery code"], "2fa-on": ["Two-step turned on", ""], "2fa-off": ["Two-step turned off", ""] }[l.event] || ["Logged in", "Refused"];
     return l.ok ? t[0] : t[1];
+  }
+
+  async function reviewOwnership(id, approve) {
+    let reason = "";
+    if (!approve) {
+      const ok = await confirmBox({ title: "Decline this request", body: `<label class="lf">Reason the customer will see<input id="cbReason" maxlength="300" placeholder="For example: we could not reach you"></label>`, go: "Decline" });
+      if (!ok) return;
+    } else {
+      const ok = await confirmBox({ title: "Approve ownership", body: `<p>Only approve if you have seen real proof that this customer owns or runs the website. Your approval is recorded.</p><label class="chk2"><input type="checkbox" id="cbAuth"><span>I have checked the proof myself.</span></label>`, go: "Approve", needCheck: true });
+      if (!ok) return;
+    }
+    reason = approve ? "" : LAST_INPUT;
+    try { await api(`/api/admin/verify/${id}`, { method: "POST", body: { approve, reason } }); } catch (ex) { alert(ex.message); }
+    loadAdmin();
   }
 
   async function loadAdmin() {
@@ -781,6 +821,10 @@
         ${stat(t.failedLogins24h ? "red" : "green", "key", "Failed sign-ins", t.failedLogins24h, "in the last 24 hours", t.failedLogins24h ? "bad" : "ok")}
       </div>
       ${warnings.length ? `<div class="pnl adm-warn">${warnings.map((w) => `<div class="row"><span class="dotline" style="background:var(--amber)"></span><div class="rt"><div class="t">${esc(w)}</div></div></div>`).join("")}</div>` : ""}
+      ${d.verifyRequests?.length ? `<div class="pnl adm-block adm-vr"><div class="ph"><h3>${ic("globe", 16)} Ownership requests (${d.verifyRequests.length})</h3></div>
+        <p class="adm-note">These customers asked a person to confirm they own a website. Contact them, and approve only once you have seen real proof: them logged in to the site's hosting or domain account, or a reply from the site's official email.</p>
+        ${d.verifyRequests.map((r) => `<div class="vr" data-id="${r.id}"><div class="vrt"><b>${esc(r.name)}</b> <span class="mono">${esc(r.target)}</span><div>${esc(r.owner || "")} · contact: <b>${esc(r.contact)}</b> · ${timeAgo(r.at)}</div><p>${esc(r.note)}</p></div>
+          <div class="vra"><button class="ghost small" data-vr="decline">Decline</button><button class="btn small" data-vr="approve">Approve</button></div></div>`).join("")}</div>` : ""}
       <div class="adm-cols">
         <div class="pnl">
           <div class="ph"><h3>${ic("shield", 16)} Authorization audit</h3><a class="all" href="/api/admin/audit.json" download>Download</a></div>
@@ -827,6 +871,7 @@
           <div class="kv"><span class="k">Internal targets allowed</span>${yes(st.internalTargetsAllowed, false)}</div>
         </div>
       </div>`;
+    el.querySelectorAll("[data-vr]").forEach((b) => { b.onclick = () => reviewOwnership(b.closest(".vr").dataset.id, b.dataset.vr === "approve"); });
   }
 
   // ---------- data ----------
@@ -928,6 +973,51 @@
     };
   }
 
+  // ---------- first thing after sign-up: the authenticator app ----------
+  const PLAY = "https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2";
+  const APPSTORE = "https://apps.apple.com/app/google-authenticator/id388497605";
+  async function setupTwoStepView() {
+    if (polling) { clearInterval(polling); polling = null; }
+    root.innerHTML = `<div class="login onboard"><div class="box wide">
+      <div class="pill"><span class="d"></span>Step 2 of 2 · Secure your account</div>
+      <h1>Turn on your authenticator</h1>
+      <p>Every Lucent Shield account is protected by a code from your phone, as well as your password. Nobody who steals your password can get in without it. It takes two minutes.</p>
+      <ol class="onb">
+        <li><b>Install Google Authenticator on your phone</b><span>It's free.</span>
+          <div class="stores"><a class="store" href="${PLAY}" target="_blank" rel="noopener">Android: Google Play Store</a><a class="store" href="${APPSTORE}" target="_blank" rel="noopener">iPhone: App Store</a></div></li>
+        <li><b>Open it and tap the + button</b><span>Then choose <b>Scan a QR code</b>.</span></li>
+        <li><b>Point your phone's camera at this code</b>
+          <div class="onbqr" id="onbQr"><div class="empty">Preparing your code…</div></div></li>
+        <li><b>Type the 6-digit code the app shows for Lucent Shield</b><span>It changes every 30 seconds. Use the newest one.</span>
+          <form id="onbForm" class="onbform"><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" aria-label="6-digit code" required><button class="btn" type="submit">Activate</button></form>
+          <div class="err" id="onbErr" role="alert"></div></li>
+      </ol>
+      <div class="switch"><button type="button" id="onbOut">Log out</button></div>
+    </div></div>`;
+    document.getElementById("onbOut").onclick = async () => { await api("/api/logout", { method: "POST" }).catch(() => {}); boot(); };
+    const qr = document.getElementById("onbQr");
+    try {
+      const r = await api("/api/account/2fa/start", { method: "POST", body: {} });
+      qr.innerHTML = `<div class="qrbox">${qrSvg(r.uri)}</div><div class="manual">Can't scan it? In the app choose <b>Enter a setup key</b>, name it Lucent Shield, and type:<div class="key"><code>${esc(r.secret.replace(/(.{4})/g, "$1 ").trim())}</code></div></div>`;
+    } catch (ex) { qr.innerHTML = `<div class="err">${esc(ex.message)}</div>`; }
+    const f = document.getElementById("onbForm");
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("onbErr"); err.textContent = "";
+      const btn = f.querySelector("button"); btn.disabled = true;
+      try {
+        const x = await api("/api/account/2fa/enable", { method: "POST", body: { code: f.code.value } });
+        ME = x.user;
+        root.querySelector(".box").innerHTML = `<div class="pill"><span class="d"></span>Account secured</div>
+          <h1>Save your recovery codes</h1>
+          <p>If you ever lose your phone, each of these codes lets you log in once instead of the app code. Write them down or save them in a safe place. They will not be shown again.</p>
+          <div class="codes">${x.recoveryCodes.map((k) => `<code>${esc(k)}</code>`).join("")}</div>
+          <button class="btn" id="onbDone" type="button">I have saved them. Continue</button>`;
+        document.getElementById("onbDone").onclick = () => start();
+      } catch (ex) { err.textContent = ex.message; btn.disabled = false; f.code.select(); }
+    };
+  }
+
   async function start() {
     await refresh();
     shell(); renderView();
@@ -941,7 +1031,9 @@
       const a = await api("/api/auth");
       ME = a.user; ADMIN = !!a.user?.admin;
       if (!ADMIN && VIEW === "admin") VIEW = "dashboard";
-      if (!a.authed) loginView(a.signups); else start();
+      if (!a.authed) loginView(a.signups);
+      else if (a.twoStepRequired && !a.user.twoStep) setupTwoStepView();
+      else start();
     }
     catch { root.innerHTML = `<div class="boot">Could not reach the server.</div>`; }
   }

@@ -43,6 +43,8 @@ export interface Asset {
   verified: boolean;
   /** The token the operator publishes (DNS or file) to prove domain ownership. */
   verifyToken: string;
+  /** For owners who cannot change files or DNS: a request for a person to confirm ownership. */
+  verifyRequest?: { note: string; contact: string; at: string; status: "pending" | "approved" | "declined"; reason?: string; reviewedBy?: string; reviewedAt?: string };
   /** Protected: re-scan automatically on the monitor schedule. Turned on only
    *  by the owner pressing Protect, which records a standing authorization. */
   monitor: boolean;
@@ -268,6 +270,22 @@ export const store = {
     assets.push(asset);
     persist(assets);
     return asset;
+  },
+
+  setVerifyRequest(id: string, r: { note: string; contact: string }): void {
+    const assets = load();
+    const a = assets.find((x) => x.id === id);
+    if (!a) return;
+    a.verifyRequest = { ...r, at: new Date().toISOString(), status: "pending" };
+    persist(assets);
+  },
+  reviewVerifyRequest(id: string, approve: boolean, reason: string, by: string): void {
+    const assets = load();
+    const a = assets.find((x) => x.id === id);
+    if (!a?.verifyRequest) return;
+    a.verifyRequest = { ...a.verifyRequest, status: approve ? "approved" : "declined", reason: reason || undefined, reviewedBy: by, reviewedAt: new Date().toISOString() };
+    if (approve) a.verified = true;
+    persist(assets);
   },
 
   setVerified(id: string, verified: boolean): Asset | undefined {

@@ -47,7 +47,7 @@ A narrated, animated walkthrough explains every part of the app: creating an acc
 Lucent Shield is strict about who may test what.
 
 - Every scan asks for explicit authorisation at the moment you run it, and records it with a timestamp.
-- A website cannot be scanned until you prove you control the domain, by publishing a token we give you as a file on the site or as a DNS record.
+- A website cannot be scanned until you prove you control the domain: publish a token we give you as a file on the site or as a DNS record, or, if you are not technical, ask the Lucent Shield team, and a person confirms it with you before the admin approves it. An authenticator code is not accepted as proof, because it proves who you are, not that you own the website.
 - Forensic examination asks you to attest to lawful authority (ownership, written permission, or a warrant or court order) and to record a reference for it.
 
 ## Run the command line tool
@@ -90,7 +90,7 @@ LUCENT_ADMIN_EMAIL="you@yourcompany.com" LUCENT_ADMIN_PASSWORD="a-long-admin-pas
 
 Nobody else can create an account with the admin email, because it needs the admin password. The admin account also gets the Admin tab.
 
-Any account can turn on **two-step login** in Settings: scan the QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, Authy), and from then on logging in needs a 6-digit code as well as the password. Ten one-time recovery codes cover a lost phone. Turn it on for the admin account first.
+Every account sets up **two-step login** straight after signing up: install Google Authenticator (Play Store or App Store), scan the QR code, and type the 6-digit code. Nothing else works until it is done, and from then on logging in needs the password and a code from the phone. Ten one-time recovery codes cover a lost phone, and Settings has **Move to a new phone**. (Set `LUCENT_REQUIRE_2FA=0` only for local development.)
 
 ## Deploy
 

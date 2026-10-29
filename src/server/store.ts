@@ -297,6 +297,25 @@ export const store = {
     return asset;
   },
 
+  /**
+   * Deletes an account and everything that belongs to it: its assets and scan
+   * results, alerts and activity. The authorization audit trail is kept, as the
+   * legal record that each scan was permitted.
+   */
+  deleteUser(id: string): { assets: number } {
+    const users = loadUsers();
+    if (!users.some((u) => u.id === id)) return { assets: 0 };
+    persistUsers(users.filter((u) => u.id !== id));
+    const assets = load();
+    const keep = assets.filter((a) => a.ownerId !== id);
+    if (keep.length !== assets.length) persist(keep);
+    const alerts = loadAlerts();
+    if (alerts.some((a) => a.ownerId === id)) persistAlerts(alerts.filter((a) => a.ownerId !== id));
+    const events = readJson<ActivityEvent[]>(EVENTS_FILE, []);
+    if (events.some((e) => e.ownerId === id)) writeJson(EVENTS_FILE, events.filter((e) => e.ownerId !== id));
+    return { assets: assets.length - keep.length };
+  },
+
   remove(id: string): boolean {
     const assets = load();
     const next = assets.filter((a) => a.id !== id);
@@ -399,7 +418,7 @@ export const store = {
   },
 
   /** Sign-in history for the admin view. Never stores passwords. */
-  logLogin(entry: { ip: string; email: string; event: "login" | "signup" | "code" | "recovery" | "2fa-on" | "2fa-off"; ok: boolean }): void {
+  logLogin(entry: { ip: string; email: string; event: "login" | "signup" | "code" | "recovery" | "2fa-on" | "2fa-off" | "deleted"; ok: boolean }): void {
     const list = readJson<any[]>(LOGINS_FILE, []);
     list.unshift({ ...entry, at: new Date().toISOString() });
     writeJson(LOGINS_FILE, list.slice(0, 500));

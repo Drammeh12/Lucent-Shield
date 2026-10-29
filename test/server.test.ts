@@ -322,9 +322,24 @@ test("too many new accounts from one address are refused", async () => {
   assert.equal((await signup({ name: "Dave", email: "dave@example.com", password: "Dave-Long-Password-1" })).status, 429);
 });
 
+test("an account can delete itself and everything it owns", async () => {
+  const h = { cookie: bob };
+  const site = (await call("/api/assets", { method: "POST", body: { name: "bob-site", kind: "web", target: "https://bob.example", authorized: true }, headers: h })).data.asset;
+  assert.equal((await call("/api/account/delete", { method: "POST", body: { password: BOB.password }, headers: h })).status, 400, "must type DELETE");
+  assert.equal((await call("/api/account/delete", { method: "POST", body: { password: "wrong-password!", confirm: "DELETE" }, headers: h })).status, 400);
+  const del = await call("/api/account/delete", { method: "POST", body: { password: BOB.password, confirm: "DELETE" }, headers: h });
+  assert.equal(del.status, 200);
+  assert.equal((await call("/api/assets", { headers: h })).status, 401, "the session ends");
+  assert.equal((await call("/api/login", { method: "POST", body: { email: BOB.email, password: BOB.password }, auth: false })).status, 401, "the account is gone");
+  const users = JSON.parse(readFileSync(join(dataDir, "users.json"), "utf8"));
+  assert.ok(!users.some((u: any) => u.email === BOB.email));
+  const assets = JSON.parse(readFileSync(join(dataDir, "assets.json"), "utf8"));
+  assert.ok(!assets.some((a: any) => a.id === site.id), "its assets are deleted");
+});
+
 test("logging out ends the session for real (the old cookie stops working)", async () => {
-  assert.equal((await call("/api/logout", { method: "POST", headers: { cookie: bob } })).status, 200);
-  assert.equal((await call("/api/assets", { headers: { cookie: bob } })).status, 401);
+  assert.equal((await call("/api/logout", { method: "POST", headers: { cookie: alice } })).status, 200);
+  assert.equal((await call("/api/assets", { headers: { cookie: alice } })).status, 401);
 });
 
 test("repeated wrong passwords lock the address out", async () => {

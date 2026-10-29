@@ -45,3 +45,18 @@ test("a new account must set up its authenticator before using anything", async 
   assert.equal(login.data.needCode, true);
   assert.equal(login.cookie, "");
 });
+
+test("an account stuck before setting up its authenticator can still delete itself, and the email is free again", async () => {
+  const s = await call("/api/signup", "POST", { name: "Tayo", email: "tayo@example.com", password: "Tayo-Long-Password-1" });
+  const del = await call("/api/account/delete", "POST", { password: "Tayo-Long-Password-1", confirm: "DELETE" }, s.cookie);
+  assert.equal(del.status, 200);
+  assert.equal((await call("/api/signup", "POST", { name: "Tayo", email: "tayo@example.com", password: "Tayo-Long-Password-2" })).status, 200);
+});
+
+test("with the authenticator on, deleting also needs a current code", async () => {
+  const s = await call("/api/signup", "POST", { name: "Kemi", email: "kemi@example.com", password: "Kemi-Long-Password-1" });
+  const st = await call("/api/account/2fa/start", "POST", {}, s.cookie);
+  await call("/api/account/2fa/enable", "POST", { code: codeFor(st.data.secret, stepAt()) }, s.cookie);
+  assert.equal((await call("/api/account/delete", "POST", { password: "Kemi-Long-Password-1", confirm: "DELETE", code: "000000" }, s.cookie)).status, 400);
+  assert.equal((await call("/api/account/delete", "POST", { password: "Kemi-Long-Password-1", confirm: "DELETE", code: codeFor(st.data.secret, stepAt() + 1) }, s.cookie)).status, 200);
+});

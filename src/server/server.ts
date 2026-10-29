@@ -444,6 +444,30 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     return json(res, 404, { error: "Unknown endpoint." });
   }
 
+  // Delete your own account. Allowed even before the authenticator is set up, so
+  // nobody is ever stuck with an account they do not want. Needs the password,
+  // the authenticator code when one is set up, and the word DELETE typed out.
+  if (path === "/api/account/delete" && method === "POST") {
+    const ip = clientIp(req);
+    const lockedFor = loginLockedFor(ip);
+    if (lockedFor > 0) return json(res, 429, { error: `Too many attempts. Try again in ${Math.ceil(lockedFor / 60)} min.` });
+    const body = await readBody(req);
+    if (String(body.confirm ?? "").trim() !== "DELETE") return json(res, 400, { error: "Type DELETE to confirm." });
+    if (!store.checkPassword(user.email, String(body.password ?? "").slice(0, 200))) {
+      noteLoginFail(ip);
+      return json(res, 400, { error: "Your password is not right." });
+    }
+    if (user.totp) {
+      const step = verifyCode(user.totp.secret, String(body.code ?? ""), user.totp.lastStep);
+      if (step === null || !store.useTotpStep(user.id, step)) { noteLoginFail(ip); return json(res, 400, { error: "The code from your authenticator app is not right." }); }
+    }
+    const { assets } = store.deleteUser(user.id);
+    for (const [k, s2] of sessions) if (s2.userId === user.id) sessions.delete(k);
+    for (const [k, t] of tickets) if (t.userId === user.id) tickets.delete(k);
+    store.logLogin({ ip, email: user.email, event: "deleted", ok: true });
+    return json(res, 200, { ok: true, deletedAssets: assets }, { "Set-Cookie": "ls=; Path=/; Max-Age=0" });
+  }
+
   // Nothing else works until the account's authenticator app is set up.
   if (REQUIRE_2FA && !user.totp) return json(res, 403, { error: "Set up your authenticator app first.", code: "2fa_required" });
 

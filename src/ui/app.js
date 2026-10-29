@@ -708,6 +708,11 @@
       <div id="tsBody">${two
         ? `<button class="btn ghost-btn" id="tsOffStart" type="button">Move to a new phone</button>`
         : `<button class="btn" id="tsStart" type="button">Turn on two-step login</button>`}</div>
+    </div>
+    <div class="set danger">
+      <div class="ts-head"><div><h3>Delete account</h3>
+        <p>Permanently deletes your account, your assets, their scan results, alerts and activity. Records that you authorised each scan are kept, as the law requires. This cannot be undone.</p></div></div>
+      <button class="btn danger-btn" id="delAcct" type="button">Delete my account</button>
     </div>`;
   }
 
@@ -722,6 +727,7 @@
     const b = document.getElementById("logout");
     if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); };
     const w = document.getElementById("watchSet"); if (w) w.onclick = watchGuide;
+    const da = document.getElementById("delAcct"); if (da) da.onclick = deleteAccount;
     const body = document.getElementById("tsBody");
     const err = () => `<div class="err" id="tsErr" role="alert"></div>`;
     const fail = (ex) => { const e = document.getElementById("tsErr"); if (e) e.textContent = ex.message; };
@@ -779,7 +785,7 @@
   const yes = (on, good = true) => `<span class="tag ${on === good ? "secure" : "exposed"}">${on ? "On" : "Off"}</span>`;
 
   function EVENT_LABEL(l) {
-    const t = { signup: ["Account created", "Sign-up refused"], login: ["Password accepted", "Refused"], code: ["Logged in with code", "Wrong code"], recovery: ["Used a recovery code", "Wrong recovery code"], "2fa-on": ["Two-step turned on", ""], "2fa-off": ["Two-step turned off", ""] }[l.event] || ["Logged in", "Refused"];
+    const t = { signup: ["Account created", "Sign-up refused"], login: ["Password accepted", "Refused"], code: ["Logged in with code", "Wrong code"], recovery: ["Used a recovery code", "Wrong recovery code"], "2fa-on": ["Two-step turned on", ""], "2fa-off": ["Two-step turned off", ""], deleted: ["Account deleted", ""] }[l.event] || ["Logged in", "Refused"];
     return l.ok ? t[0] : t[1];
   }
 
@@ -976,6 +982,38 @@
   // ---------- first thing after sign-up: the authenticator app ----------
   const PLAY = "https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2";
   const APPSTORE = "https://apps.apple.com/app/google-authenticator/id388497605";
+  /** Asks for the password, the app code (if set up) and the word DELETE, then deletes the account. */
+  function deleteAccount() {
+    const bg = document.createElement("div"); bg.className = "drawer-bg";
+    const m = document.createElement("div"); m.className = "authbox"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true");
+    m.innerHTML = `<div class="ah danger">${ic("alert", 20)} Delete your account</div>
+      <p>This deletes <b>${esc(ME?.email || "")}</b>, all your assets and their results, for good.</p>
+      <form id="delForm" class="tsform wide">
+        <label class="lf">Your password<input type="password" name="password" autocomplete="current-password" required></label>
+        ${ME?.twoStep ? `<label class="lf">Code from your authenticator app<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>` : ""}
+        <label class="lf">Type DELETE to confirm<input name="confirm" autocomplete="off" required></label>
+        <div class="arow"><button class="ghost" type="button" id="delCancel">Cancel</button><button class="btn danger-btn" type="submit" id="delGo" disabled>Delete for good</button></div>
+        <div class="err" id="delErr" role="alert"></div>
+      </form>`;
+    document.body.append(bg, m);
+    const close = () => { bg.remove(); m.remove(); };
+    bg.onclick = close; m.querySelector("#delCancel").onclick = close;
+    const f = m.querySelector("#delForm"), go = m.querySelector("#delGo");
+    f.password.focus();
+    f.confirm.oninput = () => { go.disabled = f.confirm.value.trim() !== "DELETE"; };
+    f.onsubmit = async (e) => {
+      e.preventDefault(); go.disabled = true;
+      try {
+        await api("/api/account/delete", { method: "POST", body: { password: f.password.value, code: f.code?.value || "", confirm: f.confirm.value.trim() } });
+        close();
+        if (polling) { clearInterval(polling); polling = null; }
+        ME = null; ADMIN = false; ASSETS = []; ALERTS = []; EVENTS = []; FOCUS = null; VIEW = "dashboard";
+        root.innerHTML = `<div class="login"><div class="box"><h1>Your account is deleted</h1><p>Everything that belonged to it has been removed. You can create a new account at any time.</p><button class="btn" id="delHome" type="button">Back to the start</button></div></div>`;
+        document.getElementById("delHome").onclick = () => boot();
+      } catch (ex) { m.querySelector("#delErr").textContent = ex.message; go.disabled = f.confirm.value.trim() !== "DELETE"; }
+    };
+  }
+
   async function setupTwoStepView() {
     if (polling) { clearInterval(polling); polling = null; }
     root.innerHTML = `<div class="login onboard"><div class="box wide">
@@ -992,8 +1030,9 @@
           <form id="onbForm" class="onbform"><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" aria-label="6-digit code" required><button class="btn" type="submit">Activate</button></form>
           <div class="err" id="onbErr" role="alert"></div></li>
       </ol>
-      <div class="switch"><button type="button" id="onbOut">Log out</button></div>
+      <div class="switch"><button type="button" id="onbOut">Log out</button> · <button type="button" id="onbDel">Delete this account instead</button></div>
     </div></div>`;
+    document.getElementById("onbDel").onclick = deleteAccount;
     document.getElementById("onbOut").onclick = async () => { await api("/api/logout", { method: "POST" }).catch(() => {}); boot(); };
     const qr = document.getElementById("onbQr");
     try {

@@ -544,3 +544,5 @@ a { color: var(--green); text-decoration: none; }
 .vr .mono { font: 12px var(--mono); color: var(--muted); }
 .vr .vra { display: flex; gap: 8px; flex: none; }
 @media (max-width: 640px) { .vpick { grid-template-columns: 1fr; } .vr { flex-direction: column; } }
+.set.danger { margin-top: 16px; border-color: color-mix(in srgb, var(--red) 35%, var(--line)); }
+.authbox .tsform .arow { margin-top: 6px; }

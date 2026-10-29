@@ -1,6 +1,6 @@
 {
   "name": "lucent-shield",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "description": "Defensive application-security platform by Bash Lucent. Scans code and sites you own or are authorised to test, inspects forensic artifacts, finds vulnerabilities, and tells you how to fix them. CLI + web dashboard.",
   "type": "module",

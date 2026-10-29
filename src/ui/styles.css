@@ -554,3 +554,5 @@ a { color: var(--green); text-decoration: none; }
 .pw-eye:hover { opacity: 1; }
 .pw-eye:focus-visible { opacity: 1; outline: 2px solid currentColor; outline-offset: 1px; }
 .pw-eye[aria-pressed="true"] { opacity: .95; }
+.selfshield { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 12px; font-weight: 600; margin-left: 12px; }
+.login .login-ss { margin: 12px 0 0; justify-content: center; display: flex; }

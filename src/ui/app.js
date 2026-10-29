@@ -55,7 +55,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web", SHOW_TOUR = false;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web", SHOW_TOUR = false, SHIELDED = false;
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -89,7 +89,7 @@
         </div>
         <div class="content" id="view"></div>
         <div class="content"><div class="appfoot">
-          <span>Created by Bash Lucent</span><span class="sp"></span>
+          <span>Created by Bash Lucent</span>${SHIELDED ? `<span class="selfshield">${ic("shield", 14)} Shielded by Lucent Shield on Bash Cloud</span>` : ""}<span class="sp"></span>
           <a href="/about" target="_blank">About</a><a href="/terms" target="_blank">Terms</a><a href="/privacy" target="_blank">Privacy</a>
           <span>© 2026 Bash Lucent</span>
         </div></div>
@@ -926,6 +926,7 @@
       ${signup ? `<div class="switch">Already have an account? <button type="button" id="authSwitch">Log in</button></div>`
         : signupsOpen ? `<div class="switch">New to Lucent Shield? <button type="button" id="authSwitch">Create an account</button></div>` : ""}
       <div class="watchrow">${watchBtn("watchLogin", "Watch how Lucent Shield works")}</div>
+      ${SHIELDED ? `<div class="selfshield login-ss">${ic("shield", 14)} This page is shielded by Lucent Shield on Bash Cloud</div>` : ""}
       <div class="foot"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></div>
       <div class="cap">Created by Bash Lucent · © 2026</div>
     </div></div>`;
@@ -1072,7 +1073,7 @@
   async function boot() {
     try {
       const a = await api("/api/auth");
-      ME = a.user; ADMIN = !!a.user?.admin;
+      ME = a.user; ADMIN = !!a.user?.admin; SHIELDED = !!a.shielded;
       if (!ADMIN && VIEW === "admin") VIEW = "dashboard";
       if (!a.authed) loginView(a.signups);
       else if (a.twoStepRequired && !a.user.twoStep) setupTwoStepView();

@@ -64,6 +64,20 @@ after(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+test("Lucent Shield protects itself: strict headers on every response", async () => {
+  for (const path of ["/", "/about", "/api/auth"]) {
+    const r = await fetch(base + path);
+    assert.equal(r.headers.get("x-frame-options"), "DENY", path);
+    assert.equal(r.headers.get("x-content-type-options"), "nosniff", path);
+    assert.equal(r.headers.get("referrer-policy"), "no-referrer", path);
+    assert.match(r.headers.get("permissions-policy") ?? "", /camera=\(\)/, path);
+    assert.equal(r.headers.get("cross-origin-opener-policy"), "same-origin", path);
+  }
+  // Without Bash Cloud in front (no TRUST_PROXY), a visitor cannot claim the page is shielded.
+  const fake = await fetch(base + "/api/auth", { headers: { "x-bashcloud-shield": "block" } });
+  assert.equal((await fake.json()).shielded, false);
+});
+
 test("everything private needs a login; public pages do not", async () => {
   assert.equal((await call("/api/assets", { auth: false })).status, 401);
   assert.equal((await call("/api/favicon?u=example.com", { auth: false })).status, 401);

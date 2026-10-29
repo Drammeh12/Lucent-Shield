@@ -296,7 +296,9 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
 
   if (path === "/api/auth" && method === "GET") {
     const u = currentUser(req);
-    return json(res, 200, { authed: !!u, user: u ? me(u) : null, signups: SIGNUPS_OPEN, twoStepRequired: REQUIRE_2FA, version: VERSION });
+    // Bash Cloud tells the app it sits behind its shield (and removes any copy a visitor sends).
+    const shielded = TRUST_PROXY && req.headers["x-bashcloud-shield"] === "block";
+    return json(res, 200, { authed: !!u, user: u ? me(u) : null, signups: SIGNUPS_OPEN, twoStepRequired: REQUIRE_2FA, shielded, version: VERSION });
   }
 
   // Login and sign-up come from our own page only (same check as below).
@@ -652,6 +654,14 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
 }
 
 const server = createServer(async (req, res) => {
+  // Lucent Shield protects itself first: strict headers on every response.
+  if (HTTPS) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   try {
     const url = new URL(req.url ?? "/", "http://x");
     const path = url.pathname;

@@ -196,7 +196,7 @@ test("protect needs a scan first, proven ownership, and its own recorded permiss
   assert.equal(on.status, 200);
   assert.equal(on.data.asset.monitor, true);
   const log = JSON.parse(readFileSync(join(dataDir, "authorizations.json"), "utf8"));
-  assert.equal(log[0].reference, "Continuous protection (Protect)");
+  assert.equal(log[0].reference, "Continuous monitoring (Monitor)");
 
   // An unverified website can never be protected (so it is never scanned in the background).
   const site = (await call("/api/assets", { method: "POST", body: { name: "unproven", kind: "web", target: "https://unproven.example", authorized: true } })).data.asset;

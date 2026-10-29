@@ -121,7 +121,7 @@
 
   // ---------- dashboard ----------
   // The dashboard follows the real order of work: 1) choose a scan type and
-  // scan, watching the findings stream in, 2) protect the asset, which closes
+  // scan, watching the findings stream in, 2) monitor the asset, which closes
   // the padlock and keeps watching it. The padlock always shows ONE asset.
   const SCAN_TYPES = [
     { kind: "repo", icon: "code", title: "White box", sub: "Your code: secrets, risky code, vulnerable packages", ph: "https://github.com/you/your-repo", btn: "Scan code" },
@@ -133,7 +133,7 @@
   const openAny = (a) => openBad(a) + (a?.counts?.medium || 0) + (a?.counts?.low || 0);
   const hostOf = (t) => String(t || "").replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
 
-  /** What the padlock shows for one asset. Closed only when it is protected. */
+  /** What the padlock shows for one asset. Closed only when it is monitored. */
   function lockState(a) {
     if (!a) return "new";
     if (a.shield === "scanning") return "scanning";
@@ -144,14 +144,16 @@
     if (openAny(a)) return "at_risk";
     return "ready";
   }
-  const LOCK_WORD = { unreached: "NOT REACHED", new: "", unverified: "NOT VERIFIED", scanning: "SCANNING", exposed: "EXPOSED", at_risk: "OPEN", ready: "NOT PROTECTED", watching: "PROTECTED", secure: "SECURED", securing: "LOCKING" };
+  const LOCK_WORD = { unreached: "NOT REACHED", new: "", unverified: "NOT VERIFIED", scanning: "SCANNING", exposed: "EXPOSED", at_risk: "OPEN", ready: "NOT MONITORED", watching: "MONITORED", secure: "MONITORED", securing: "LOCKING" };
+  /** Only a site that really sits behind Lucent Shield on Bash Cloud is called shielded. */
+  const lockWord = (st, a) => (a?.shielded && (st === "secure" || st === "watching") ? "SHIELDED" : LOCK_WORD[st] || "");
 
   function statsView() {
     const total = ASSETS.length, prot = ASSETS.filter((a) => a.monitor).length, exposed = ASSETS.filter((a) => openBad(a) > 0).length;
     const stat = (cls, icon, label, n, sub, subcls = "") => `<div class="stat"><div class="si ${cls}">${ic(icon, 20)}</div><div><div class="l">${label}</div><div class="n">${n}</div><div class="sub ${subcls}">${sub}</div></div></div>`;
     return `<div class="stats">
       ${stat("blue", "globe", "Assets", total, `${ASSETS.filter((a) => !a.lastScanAt).length} not scanned yet`)}
-      ${stat("green", "shield", "Protected", prot, prot ? "Watched around the clock" : "Press Protect after a scan", prot ? "ok" : "")}
+      ${stat("green", "shield", "Monitored", prot, prot ? `${ASSETS.filter((a) => a.shielded).length} shielded on Bash Cloud` : "Press Monitor after a scan", prot ? "ok" : "")}
       ${stat("red", "alert", "Exposed", exposed, exposed ? "Critical or high issues open" : "No critical or high issues", exposed ? "bad" : "ok")}
       ${stat("violet", "radar", "Scans run", TOTAL_SCANS, "by your account")}
     </div>`;
@@ -186,7 +188,7 @@
       ${flowIcon(a)}
       <div class="scanline"></div>
       ${shieldLockSvg()}
-      <div class="statusword" id="statusword">${LOCK_WORD[st] || ""}</div>
+      <div class="statusword" id="statusword">${lockWord(st, a)}</div>
       ${a ? `<div class="lockname">${esc(a.name)}</div>` : ""}
     </div>`;
   }
@@ -203,11 +205,11 @@
       <div class="nt"><b>${esc(a.name)} could not be checked</b><span>${a.kind === "web" ? "The site did not answer. Check the address is right and the site is online, then scan again." : "The repository could not be downloaded. Check the address. Private repositories cannot be read yet."}</span></div>
       <button class="btn" data-act="scan" data-id="${a.id}">Scan again</button></div>`;
     if (!a.monitor) return `<div class="next protect">
-      <div class="nt"><b>Protect ${esc(a.name)}</b><span>Lucent Shield keeps checking it every few hours and alerts you the moment something changes, like a new exposed file, a weakened setting or a new vulnerable package.</span></div>
-      <div class="na">${openAny(a) ? `<button class="ghost" data-act="report" data-id="${a.id}">See the fixes</button>` : ""}<button class="btn" data-act="protect" data-id="${a.id}">${ic("shield", 16)} Protect</button></div></div>`;
+      <div class="nt"><b>Monitor ${esc(a.name)}</b><span>Lucent Shield checks it again every few hours and alerts you the moment something changes, like a new exposed file, a weakened setting or a new vulnerable package. ${a.shielded ? "It is also shielded on Bash Cloud, so attacks are blocked before they reach it." : "Apply the fixes to make it safe. To block attacks as they happen, host it on Bash Cloud."}</span></div>
+      <div class="na">${openAny(a) ? `<button class="ghost" data-act="report" data-id="${a.id}">See the fixes</button>` : ""}<button class="btn" data-act="protect" data-id="${a.id}">${ic("shield", 16)} Monitor</button></div></div>`;
     return `<div class="next on">
-      <div class="nt"><b>${openBad(a) ? `Protected, with ${openBad(a)} ${openBad(a) === 1 ? "fix" : "fixes"} still to make` : "Protected and secure"}</b>
-      <span>${openBad(a) ? "Lucent Shield is watching it. The padlock turns fully green once the critical and high issues are fixed and a scan confirms it." : "Lucent Shield is watching it and will alert you if anything changes."} Last checked ${timeAgo(a.lastScanAt)}.</span></div>
+      <div class="nt"><b>${openBad(a) ? `Monitored, with ${openBad(a)} ${openBad(a) === 1 ? "fix" : "fixes"} still to make` : a.shielded ? "Shielded and monitored" : "Monitored, no serious issues found"}</b>
+      <span>${openBad(a) ? "Lucent Shield is watching it, but it is not safe until these are fixed. The padlock turns green once a scan confirms they are." : a.shielded ? "Attacks are blocked before they reach it, and Lucent Shield alerts you if anything changes." : "Lucent Shield alerts you if anything changes. It finds problems; it does not block attacks on sites hosted elsewhere."} Last checked ${timeAgo(a.lastScanAt)}.</span></div>
       <div class="na"><button class="ghost" data-act="report" data-id="${a.id}">Report</button><button class="ghost" data-act="scan" data-id="${a.id}">Scan again</button></div></div>`;
   }
 
@@ -215,15 +217,15 @@
     const a = focusAsset();
     const st = lockState(a);
     const type = typesFor().find((t) => t.kind === SCAN_KIND) || typesFor()[1] || typesFor()[0];
-    const title = !a ? "Scan, then protect" : st === "secure" ? `${esc(a.name)} is protected` : st === "watching" ? `${esc(a.name)} is being watched` : st === "exposed" ? `${esc(a.name)} is exposed` : st === "unverified" ? `Verify ${esc(hostOf(a.target))}` : `${esc(a.name)}`;
+    const title = !a ? "Scan, then monitor" : st === "secure" ? (a.shielded ? `${esc(a.name)} is shielded` : `${esc(a.name)} is monitored`) : st === "watching" ? `${esc(a.name)} is being watched` : st === "exposed" ? `${esc(a.name)} is exposed` : st === "unverified" ? `Verify ${esc(hostOf(a.target))}` : `${esc(a.name)}`;
     const step = !a || !a.lastScanAt ? 1 : a.monitor ? 3 : 2;
     return `<div class="hero ${st}" id="hero">
       <div class="heroL">
-        <span class="live"><span class="dot"></span>${st === "secure" || st === "watching" ? "Live protection" : "Lucent Shield"}</span>
+        <span class="live"><span class="dot"></span>${a?.shielded && (st === "secure" || st === "watching") ? "Shielded on Bash Cloud" : st === "secure" || st === "watching" ? "Monitoring" : "Lucent Shield"}</span>
         <h1 id="heroTitle">${title}</h1>
         <ol class="stepper">
           <li class="${step > 1 ? "done" : "on"}"><span>1</span>Scan</li>
-          <li class="${step === 2 ? "on" : step > 2 ? "done" : ""}"><span>2</span>Protect</li>
+          <li class="${step === 2 ? "on" : step > 2 ? "done" : ""}"><span>2</span>Monitor</li>
         </ol>
         <div class="types" role="tablist" aria-label="Scan type">${typesFor().map((t) => `<button role="tab" class="type ${t.kind === type.kind ? "on" : ""}" data-type="${t.kind}" aria-selected="${t.kind === type.kind}">${ic(t.icon, 16)}<span><b>${t.title}</b><small>${t.sub}</small></span></button>`).join("")}</div>
         <div class="scanbar" id="heroScanbar">
@@ -242,7 +244,7 @@
     const preview = ASSETS.slice(0, 5).map((a) => `<div class="row" data-focus="${a.id}" style="cursor:pointer">
       <span class="dotline" style="background:${dotColor(a)}"></span>
       <div class="rt"><div class="t">${esc(a.name)}</div><div class="s">${KIND_LABEL[a.kind]} · ${a.lastScanAt ? `scanned ${timeAgo(a.lastScanAt)}` : a.kind === "web" && !a.verified ? "ownership not verified" : "not scanned"}</div></div>
-      ${a.monitor ? `<span class="tag secure">Protected</span>` : a.lastScanAt ? `<span class="tag ${a.shield}">${STATE_LABEL[a.shield]}</span>` : `<span class="tag new">New</span>`}</div>`).join("") || `<div class="empty">Nothing yet. Choose a scan type above and scan something you own.</div>`;
+      ${a.monitor ? `<span class="tag secure">${a.shielded ? "Shielded" : "Monitored"}</span>` : a.lastScanAt ? `<span class="tag ${a.shield}">${STATE_LABEL[a.shield]}</span>` : `<span class="tag new">New</span>`}</div>`).join("") || `<div class="empty">Nothing yet. Choose a scan type above and scan something you own.</div>`;
     const activity = buildActivity().slice(0, 7).map((e) => `<div class="row"><span class="dotline" style="background:${e.color}"></span><div class="rt"><div class="t">${esc(e.text)}</div><div class="s">${timeAgo(e.when)}</div></div></div>`).join("") || `<div class="empty">No activity yet.</div>`;
     return statsView() + heroView() + `<div class="cols two">
       <div class="pnl"><div class="ph"><h3>${ic("assets", 16)} Your assets</h3><button class="all" data-view="assets">View all</button></div>${preview}</div>
@@ -289,15 +291,15 @@
     };
   }
 
-  // ---------- the live scan and protect sequences ----------
+  // ---------- the live scan and monitor sequences ----------
   const heroEl = (id) => document.getElementById(id);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   function setLock(state, asset) {
     const l = heroEl("herolock"), h = heroEl("hero");
     if (l) l.className = "herolock " + state;
     if (h) h.className = "hero " + state;
-    const s = heroEl("statusword"); if (s) s.textContent = LOCK_WORD[state] || "";
-    const live = h?.querySelector(".live"); if (live) live.lastChild.textContent = state === "secure" || state === "watching" ? "Live protection" : "Lucent Shield";
+    const s = heroEl("statusword"); if (s) s.textContent = lockWord(state, asset);
+    const live = h?.querySelector(".live"); if (live) live.lastChild.textContent = asset?.shielded && (state === "secure" || state === "watching") ? "Shielded on Bash Cloud" : state === "secure" || state === "watching" ? "Monitoring" : "Lucent Shield";
     if (asset) {
       const step = !asset.lastScanAt ? 1 : asset.monitor ? 3 : 2;
       h?.querySelectorAll(".stepper li").forEach((li, i) => { li.className = i + 1 < step ? "done" : i + 1 === step ? "on" : ""; });
@@ -379,28 +381,29 @@
       const note = (a.findings || []).find((f) => /^(scan|repo)\./.test(f.rule));
       logLine(note ? "warn" : "ok", note ? esc(note.title) : "No issues found");
     }
+    if (a.shielded) { await wait(300); logLine("ok", "Shielded by Lucent Shield on Bash Cloud: attacks are blocked before they reach it"); }
     await wait(500);
     ASSETS = ASSETS.map((x) => (x.id === a.id ? { ...x, ...a } : x));
     const st = lockState({ ...asset, ...a });
     setLock(st, { ...asset, ...a });
-    setTitle(st === "exposed" ? `${a.name} is exposed` : st === "secure" ? `${a.name} is protected` : st === "unreached" ? `${a.name} could not be checked` : a.name);
+    setTitle(st === "exposed" ? `${a.name} is exposed` : st === "secure" ? `${a.name}: no serious issues found` : st === "unreached" ? `${a.name} could not be checked` : a.name);
     if (st !== "unreached") logLine(openBad(a) ? "bad" : openAny(a) ? "warn" : "ok", openBad(a) ? `${openBad(a)} critical or high. Fix these first.` : openAny(a) ? "No critical or high issues." : "Clean.");
     const n = heroEl("nextStep"); if (n) n.innerHTML = nextStep({ ...asset, ...a });
     SEQ = false;
     refreshQuiet();
   }
 
-  /** Step 2: Protect. A standing permission to keep checking, then the padlock closes. */
+  /** Step 2: Monitor. A standing permission to keep checking, then the padlock closes. */
   async function protect(asset) {
     const ok = await confirmBox({
-      title: "Protect " + asset.name,
-      body: `<p>Lucent Shield will check <b>${esc(asset.name)}</b> again every few hours, using the same read-only checks, and alert you the moment something changes.</p>
-        <label class="chk2"><input type="checkbox" id="cbAuth"><span>I own ${asset.kind === "web" ? "this website" : "this code"} or am authorised to test it, and I permit Lucent Shield to keep checking it until I pause protection.</span></label>`,
-      go: "Turn on protection", needCheck: true,
+      title: "Monitor " + asset.name,
+      body: `<p>Lucent Shield will check <b>${esc(asset.name)}</b> again every few hours, using the same read-only checks, and alert you the moment something changes. Monitoring finds problems; it does not block attacks or change your site.</p>
+        <label class="chk2"><input type="checkbox" id="cbAuth"><span>I own ${asset.kind === "web" ? "this website" : "this code"} or am authorised to test it, and I permit Lucent Shield to keep checking it until I pause monitoring.</span></label>`,
+      go: "Turn on monitoring", needCheck: true,
     });
     if (!ok) return;
     SEQ = true;
-    startLog(); setLock("securing"); setTitle(`Protecting ${asset.name}…`);
+    startLog(); setLock("securing"); setTitle(`Setting up monitoring for ${asset.name}…`);
     let a;
     try { a = (await api(`/api/assets/${asset.id}/monitor`, { method: "POST", body: { on: true, authorized: true } })).asset; }
     catch (ex) { logLine("bad", esc(ex.message)); setLock(lockState(asset)); SEQ = false; return; }
@@ -411,8 +414,9 @@
     ASSETS = ASSETS.map((x) => (x.id === a.id ? { ...x, ...a } : x));
     const st = lockState(a);
     setLock(st, a);
-    setTitle(st === "secure" ? `${a.name} is protected` : `${a.name} is being watched`);
-    logLine(st === "secure" ? "ok" : "warn", st === "secure" ? "Locked. Protection is live." : `Protection is live. ${openBad(a)} critical or high ${openBad(a) === 1 ? "issue is" : "issues are"} still open: fix ${openBad(a) === 1 ? "it" : "them"} to turn the padlock green.`);
+    setTitle(st === "secure" ? (a.shielded ? `${a.name} is shielded` : `${a.name} is monitored`) : `${a.name} is being watched`);
+    if (a.shielded) logLine("ok", "Shielded on Bash Cloud: attacks are blocked before they reach it.");
+    logLine(st === "secure" ? "ok" : "warn", st === "secure" ? "Monitoring is on. You will be alerted to any change." : `Monitoring is on. ${openBad(a)} critical or high ${openBad(a) === 1 ? "issue is" : "issues are"} still open: fix ${openBad(a) === 1 ? "it" : "them"} to turn the padlock green.`);
     const n = heroEl("nextStep"); if (n) n.innerHTML = nextStep(a);
     SEQ = false;
     refreshQuiet();
@@ -582,7 +586,7 @@
     const unverified = a.kind === "web" && !a.verified;
     return `<div class="card s-${a.shield}" data-id="${a.id}">
       <span class="kind">${KIND_LABEL[a.kind] || a.kind}</span>
-      ${a.kind !== "artifact" && a.lastScanAt ? `<button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Protected. Click to pause" : "Not protected. Click to protect"}">${a.monitor ? "● protected" : "○ not protected"}</button>` : ""}
+      ${a.kind !== "artifact" && a.lastScanAt ? `<button class="mon ${a.monitor ? "on" : ""}" data-act="mon" title="${a.monitor ? "Monitored. Click to pause" : "Not monitored. Click to monitor"}">${a.monitor ? (a.shielded ? "● shielded" : "● monitored") : "○ not monitored"}</button>` : ""}
       <button class="del" data-act="del" title="Remove">✕</button>
       ${lockSvg("padlock")}
       <div class="name">${esc(a.name)}</div>
@@ -640,14 +644,14 @@
   async function toggleMonitor(id) {
     const a = ASSETS.find((x) => x.id === id); if (!a) return;
     if (!a.monitor) { VIEW = "dashboard"; FOCUS = id; shell(); renderView(); protect(a); return; }
-    const ok = await confirmBox({ title: "Pause protection", body: `<p>Lucent Shield will stop checking <b>${esc(a.name)}</b> until you protect it again.</p>`, go: "Pause protection" });
+    const ok = await confirmBox({ title: "Pause monitoring", body: `<p>Lucent Shield will stop checking <b>${esc(a.name)}</b> until you monitor it again.</p>`, go: "Pause monitoring" });
     if (!ok) return;
     try { const { asset } = await api(`/api/assets/${id}/monitor`, { method: "POST", body: { on: false } }); ASSETS = ASSETS.map((x) => (x.id === id ? { ...x, ...asset } : x)); setCard(id); refreshQuiet(); } catch {}
   }
 
   async function removeAsset(id) {
     const a = ASSETS.find((x) => x.id === id);
-    const ok = await confirmBox({ title: "Remove " + (a?.name || "asset"), body: "<p>Its scan results and protection will be removed. The authorization records are kept.</p>", go: "Remove" });
+    const ok = await confirmBox({ title: "Remove " + (a?.name || "asset"), body: "<p>Its scan results and monitoring will be removed. The authorization records are kept.</p>", go: "Remove" });
     if (!ok) return;
     await api(`/api/assets/${id}`, { method: "DELETE" }); if (FOCUS === id) FOCUS = null; await refresh(); renderView();
   }

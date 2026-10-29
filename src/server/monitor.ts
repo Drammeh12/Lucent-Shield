@@ -69,7 +69,7 @@ async function scanOne(asset: Asset): Promise<void> {
     store.endScan(asset.id);
   }
   if (!updated) return;
-  if (updated.ownerId) store.addEvent({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: "autoscan", shield: updated.shield, text: `Protection check of ${updated.name}: ${summary(updated)}` });
+  if (updated.ownerId) store.addEvent({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: "autoscan", shield: updated.shield, text: `Monitoring check of ${updated.name}: ${summary(updated)}` });
 
   const afterHighCrit = updated.counts.critical + updated.counts.high;
   const worse = RANK[updated.shield] > RANK[beforeShield] || afterHighCrit > beforeHighCrit;
@@ -83,7 +83,7 @@ async function scanOne(asset: Asset): Promise<void> {
     store.addAlert({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: afterHighCrit > beforeHighCrit && RANK[updated.shield] === RANK[beforeShield] ? "new-issues" : "worsened", message: msg });
     if (isAdminOwned(updated)) await dispatch(msg, { asset: updated.name, shield: updated.shield });
   } else if (recovered) {
-    const msg = `🔒 Lucent Shield: "${updated.name}" is protected again. All critical and high issues are cleared.`;
+    const msg = `🔒 Lucent Shield: "${updated.name}" has no critical or high issues again.`;
     store.addAlert({ ownerId: updated.ownerId, assetId: updated.id, assetName: updated.name, type: "recovered", message: msg });
     if (isAdminOwned(updated)) await dispatch(msg, { asset: updated.name, shield: updated.shield });
   }

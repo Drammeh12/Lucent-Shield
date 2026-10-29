@@ -45,14 +45,16 @@ export interface Asset {
   verifyToken: string;
   /** For owners who cannot change files or DNS: a request for a person to confirm ownership. */
   verifyRequest?: { note: string; contact: string; at: string; status: "pending" | "approved" | "declined"; reason?: string; reviewedBy?: string; reviewedAt?: string };
-  /** Protected: re-scan automatically on the monitor schedule. Turned on only
-   *  by the owner pressing Protect, which records a standing authorization. */
+  /** Monitored: re-scanned automatically on a schedule. Turned on only by the
+   *  owner pressing Monitor, which records a standing authorization. */
   monitor: boolean;
   createdAt: string;
   lastScanAt: string | null;
   shield: Shield;
   counts: ReturnType<typeof countBySeverity>;
   findings: Finding[];
+  /** The site sits behind Lucent Shield on Bash Cloud (seen in its last scan). */
+  shielded?: boolean;
   /** How many files the last scan read (repo and forensic scans). */
   filesScanned?: number;
 }
@@ -333,6 +335,7 @@ export const store = {
     asset.counts = countBySeverity(result.findings);
     asset.shield = shieldFor(result.findings);
     asset.filesScanned = result.filesScanned;
+    asset.shielded = result.findings.some((f) => f.rule === "web.shield.active");
     persist(assets);
     const meta = loadMeta();
     meta.scans++;

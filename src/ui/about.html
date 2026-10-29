@@ -29,6 +29,7 @@
   footer a{color:var(--muted);text-decoration:none}
   footer a:hover{color:var(--text)}
   footer .sp{flex:1}
+  code{font:13px ui-monospace,Menlo,monospace;color:var(--green,#2fe6a6)}
   @media(max-width:620px){.grid{grid-template-columns:1fr}h1{font-size:28px}}
 </style>
 </head>
@@ -42,15 +43,23 @@
   <h1>Security you can actually see.</h1>
   <p class="tag">Security beyond boundaries.</p>
 
-  <p class="lead">Most security tools hand you a wall of jargon and leave you to figure out what it means. Lucent Shield does the opposite. It watches your websites and your code, tells you in plain words what is exposed, and spells out exactly how to fix it.</p>
+  <p class="lead">Most security tools hand you a wall of jargon and leave you to figure out what it means. Lucent Shield does the opposite. It watches your websites and your code, tells you in plain words what is exposed, and spells out exactly how to fix it. Sites hosted on Bash Cloud are also shielded: attacks are stopped before they reach them.</p>
 
   <h2>What it does</h2>
   <div class="grid">
     <div class="card"><h3>White-box scanning</h3><p>Point it at your own code and it looks for leaked secrets, risky patterns, and dependencies with known vulnerabilities.</p></div>
     <div class="card"><h3>Black-box scanning</h3><p>Give it a website you own and it checks the outside view: headers, TLS, cookies, and files that should never be public.</p></div>
-    <div class="card"><h3>Live protection</h3><p>A padlock that stays green and calm when you are safe, and turns red the moment something changes, so you are never the last to know.</p></div>
+    <div class="card"><h3>Monitoring</h3><p>Once you press Monitor, Lucent Shield checks again every few hours and alerts you the moment something gets worse, so you are never the last to know.</p></div>
     <div class="card"><h3>Forensics</h3><p>Inspect a file or an artifact, capture its fingerprint, and surface anything that looks out of place.</p></div>
   </div>
+
+  <h2>Monitored, or shielded</h2>
+  <p>We are careful about what we promise, so here is exactly what you get.</p>
+  <div class="grid">
+    <div class="card"><h3>Any website or code: monitored</h3><p>Lucent Shield finds the weaknesses, tells you how to fix each one, and keeps watching. Your site becomes safer when you or your developer apply the fixes. Monitoring does not change your site and does not block attackers.</p></div>
+    <div class="card"><h3>Sites hosted on Bash Cloud: shielded</h3><p>Every visit passes through Lucent Shield before it reaches your site. It blocks common attacks such as SQL injection, script injection and path traversal, never serves secret files like <code>.env</code> or <code>.git</code>, slows down anyone guessing passwords, hides your server version and adds the security headers your site is missing. You can watch every blocked attempt and show a live "Shielded by Lucent Shield" badge.</p></div>
+  </div>
+  <p>The shield is a strong first line, not a replacement for fixing your site: it checks the address of every visit, not the contents of forms, so keep your code up to date and use the scans to fix the causes. A green padlock means our checks found nothing serious at the last scan. No tool can promise that a site cannot be hacked, and we never will.</p>
 
   <h2>How we are different</h2>
   <p>Plenty of scanners can list problems. Lucent Shield is built to keep watching after the first scan, to explain itself in language a founder can act on, and to show you the fix next to the finding. It is a defensive tool. It only ever looks at what you own or are allowed to test, and it never attacks anything.</p>

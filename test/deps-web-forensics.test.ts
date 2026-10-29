@@ -149,3 +149,15 @@ test("forensics: a huge artifact is fully hashed but only partly read", async ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("web: a site behind Lucent Shield on Bash Cloud is recognised as shielded", async () => {
+  const http = await import("node:http");
+  const srv = http.createServer((_q, r) => { r.writeHead(200, { "content-type": "text/html", "x-protected-by": "Lucent Shield", "x-content-type-options": "nosniff" }); r.end("<html></html>"); });
+  await new Promise<void>((done) => srv.listen(0, "127.0.0.1", () => done()));
+  const port = (srv.address() as any).port;
+  process.env.LUCENT_ALLOW_INTERNAL = "1";
+  try {
+    const out = await scanWeb(`http://127.0.0.1:${port}`);
+    assert.ok(out.some((f) => f.rule === "web.shield.active"));
+  } finally { srv.close(); }
+});

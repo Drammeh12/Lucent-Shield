@@ -249,6 +249,13 @@ export async function scanWeb(rawUrl: string): Promise<Finding[]> {
   const onHttps = final.protocol === "https:";
   const body = await readCapped(res);
 
+  // Hosted on Bash Cloud with Lucent Shield in front: attacks are blocked before they reach the site.
+  if (/lucent shield/i.test(h.get("x-protected-by") ?? "")) {
+    add({ rule: "web.shield.active", severity: "info", location: final.href, title: "Shielded by Lucent Shield on Bash Cloud",
+      detail: "Every visit passes through Lucent Shield first. It blocks common attacks, keeps secret files private, slows password guessing and adds missing security headers.",
+      remediation: "Nothing to do. Keep the site's own code up to date too: the shield is a strong first line, not a replacement for fixing problems." });
+  }
+
   // Headers that are missing...
   for (const rule of HEADER_RULES) {
     if (rule.httpsOnly && !onHttps) continue;

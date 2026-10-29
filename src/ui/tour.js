@@ -17,7 +17,7 @@
     const log = () => el("div", { class: "ls-log" });
     const line = (cls, text) => el("div", {}, el("span", { class: cls, text: { ok: "✓ ", bad: "✕ ", warn: "! ", run: "› " }[cls] || "· " }), text);
     const check = (text) => el("div", { class: "ls-check" }, el("i"), el("span", { text }));
-    const steps = (n) => el("div", { class: "ls-steps" }, el("span", { class: n > 1 ? "done" : "on", text: "1 Scan" }), el("span", { class: n === 2 ? "on" : n > 2 ? "done" : "", text: "2 Protect" }));
+    const steps = (n) => el("div", { class: "ls-steps" }, el("span", { class: n > 1 ? "done" : "on", text: "1 Scan" }), el("span", { class: n === 2 ? "on" : n > 2 ? "done" : "", text: "2 Monitor" }));
     function lock(state) {
       const w = el("div", { class: `ls-lock ${state}` });
       w.innerHTML = `<div class="orb"><i>&lt;&gt;</i><i>API</i><i>DB</i><i>SRV</i></div>
@@ -86,10 +86,10 @@
       {
         title: "Your dashboard",
         pose: "point",
-        say: "This is your dashboard. At the top: how many assets you have, how many are protected, how many are exposed with serious problems, and how many scans you have run. An asset is simply something you protect: your code, or your website.",
+        say: "This is your dashboard. At the top: how many assets you have, how many are monitored, how many are exposed with serious problems, and how many scans you have run. An asset is simply something you protect: your code, or your website.",
         async build(screen, api) {
-          const stats = el("div", { class: "ls-stats" }, ...[["0", "Assets"], ["0", "Protected"], ["0", "Exposed"], ["0", "Scans run"]].map(([n, l]) => el("div", { class: "ls-stat" }, el("b", { text: n }), el("span", { text: l }))));
-          screen.append(bar("Dashboard", "Amaka"), body(stats, el("div", { class: "ls-h", text: "Scan, then protect" }), steps(1), lock(""), el("div", { class: "ls-word", text: "Waiting for your first scan" })));
+          const stats = el("div", { class: "ls-stats" }, ...[["0", "Assets"], ["0", "Monitored"], ["0", "Exposed"], ["0", "Scans run"]].map(([n, l]) => el("div", { class: "ls-stat" }, el("b", { text: n }), el("span", { text: l }))));
+          screen.append(bar("Dashboard", "Amaka"), body(stats, el("div", { class: "ls-h", text: "Scan, then monitor" }), steps(1), lock(""), el("div", { class: "ls-word", text: "Waiting for your first scan" })));
           await api.wait(1200);
           for (const s of stats.children) { await api.tap(s); }
           api.hideTap();
@@ -179,42 +179,55 @@
         },
       },
       {
-        title: "Step 2: Protect",
+        title: "Step 2: Monitor",
         pose: "cheer",
-        say: "Step two: press Protect. You give permission once for Lucent Shield to keep checking your site. The padlock closes on the shield, your site's icon flows through it, and your code, API, database and server start circling it. That means protection is live.",
+        say: "Step two: press Monitor. You give permission once for Lucent Shield to keep checking your site every few hours and alert you to any change. The padlock closes and your code, API, database and server start circling it. Monitoring finds problems; you make the site safe by applying the fixes.",
         async build(screen, api) {
           const lk = lock("red");
           const word = el("div", { class: "ls-word", text: "EXPOSED" });
-          const prot = btn("Protect");
+          const prot = btn("Monitor");
           screen.append(bar("Dashboard"), body(steps(2), lk, word, prot));
           await api.wait(1200);
           await api.tap(prot);
           lk.className = "ls-lock amber closed";
-          word.textContent = "PROTECTED";
+          word.textContent = "MONITORED";
           await api.wait(1400);
           lk.className = "ls-lock green closed";
-          word.textContent = "SECURED";
-          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-toast", text: "Protection is live" })));
+          word.textContent = "MONITORED";
+          screen.querySelector(".ls-body").append(hidden(el("div", { class: "ls-toast", text: "Monitoring is on" })));
           await api.reveal(screen.querySelector(".ls-toast"));
         },
       },
       {
         title: "Green, amber and red",
         pose: "think",
-        say: "What the colours mean. Red and open: serious problems and no protection. Amber and closed: protected and watched, but some critical or high fixes are still waiting. Green and closed: protected, and nothing serious is open. Fix the issues and scan again to turn it green.",
+        say: "What the colours mean. Red and open: serious problems found, not monitored. Amber and closed: monitored, but critical or high fixes are still waiting. Green and closed: monitored, and nothing serious was found at the last scan. Fix the issues and scan again to turn it green.",
         async build(screen, api) {
-          const items = [["red", "Red and open: exposed, not protected"], ["amber closed", "Amber and closed: protected, fixes still to make"], ["green closed", "Green and closed: protected and secure"]]
+          const items = [["red", "Red and open: exposed, not monitored"], ["amber closed", "Amber and closed: monitored, fixes still to make"], ["green closed", "Green and closed: monitored, nothing serious found"]]
             .map(([c, t]) => hidden(el("div", { class: "ls-row ls-mini" }, lock(c), el("span", { text: t }))));
           screen.append(bar("Dashboard"), body(...items));
           for (const r of items) await api.reveal(r, 900);
         },
       },
       {
+        title: "Shielded on Bash Cloud",
+        pose: "cheer",
+        say: "Host your site on Bash Cloud and it is also shielded. Every visit passes through Lucent Shield first: attacks like SQL injection are blocked, secret files stay private, password guessing is slowed down, and the missing security headers are added. Your padlock says Shielded, and you can show a live badge on your site.",
+        async build(screen, api) {
+          const url = el("div", { class: "ls-row ls-url" }, el("span", { class: "sl", text: "🛡" }), el("b", { text: "myshop.apps.bashcloud.io" }), el("span", { class: "sl", text: "🛡" }));
+          const rows = [["r", "Blocked: SQL injection", "GET /item?id=1 UNION SELECT…"], ["r", "Blocked: secret file", "GET /.env"], ["a", "Slowed: password guessing", "11 log-in tries in 5 minutes"]].map(([d, t, m]) => hidden(row(d, t, m, "Blocked", "g")));
+          const lk = lock("green closed");
+          screen.append(bar("Lucent Shield"), body(url, lk, el("div", { class: "ls-word", text: "SHIELDED" }), ...rows));
+          await api.wait(900);
+          for (const r of rows) await api.reveal(r, 650);
+        },
+      },
+      {
         title: "Alerts and recent activity",
         pose: "point",
-        say: "While protected, Lucent Shield checks again every few hours. If something changes, like a file becoming public, a setting being weakened, or a new vulnerable package, you get an alert on the bell. Recent activity lists everything that really happened, in order.",
+        say: "While monitored, Lucent Shield checks again every few hours. If something changes, like a file becoming public, a setting being weakened, or a new vulnerable package, you get an alert on the bell. Recent activity lists everything that really happened, in order.",
         async build(screen, api) {
-          const rows = [row("r", "myshop.ng is now EXPOSED: 1 high", "just now"), row("g", "Protection turned on for myshop.ng", "2h ago"), row("c", "Ownership of myshop.ng proven", "2h ago"), row("", "Added myshop.ng", "2h ago")].map(hidden);
+          const rows = [row("r", "myshop.ng is now EXPOSED: 1 high", "just now"), row("g", "Monitoring turned on for myshop.ng", "2h ago"), row("c", "Ownership of myshop.ng proven", "2h ago"), row("", "Added myshop.ng", "2h ago")].map(hidden);
           screen.append(bar("Recent activity", "🔔 1"), body(...rows));
           for (const r of rows) await api.reveal(r, 550);
         },
@@ -222,9 +235,9 @@
       {
         title: "Your assets",
         pose: "point",
-        say: "The Assets page shows everything you protect, each with its own padlock. From here you can scan again, open the report, pause protection or remove an asset. Your assets are private: no other account can ever see them.",
+        say: "The Assets page shows everything you look after, each with its own padlock. From here you can scan again, open the report, pause monitoring or remove an asset. Your assets are private: no other account can ever see them.",
         async build(screen, api) {
-          const a = row("g", "myshop.ng", "Black box · scanned 1h ago", "Protected", "g");
+          const a = row("g", "myshop.ng", "Black box · scanned 1h ago", "Shielded", "g");
           const b = row("a", "myshop-api", "White box · scanned 3h ago", "Needs attention", "a");
           const again = btn("Scan again", "ghost");
           screen.append(bar("Assets"), body(a, b, again, btn("Report", "ghost")));
@@ -236,9 +249,9 @@
       {
         title: "You're ready",
         pose: "cheer",
-        say: "That's everything: secure your account with your phone, choose a scan, give permission, prove ownership for websites, read the fixes, then press Protect. You can watch this video again any time from the top of your dashboard. Stay safe out there!",
+        say: "That's everything: secure your account with your phone, choose a scan, give permission, prove ownership for websites, apply the fixes, then press Monitor. And for full shielding, host your site on Bash Cloud. You can watch this video again any time from the top of your dashboard. Stay safe out there!",
         async build(screen, api) {
-          const hero = el("div", { class: "ls-hero" }, lock("green closed"), el("h3", { text: "You're protected" }), el("p", { text: "Scan · Detect · Secure" }));
+          const hero = el("div", { class: "ls-hero" }, lock("green closed"), el("h3", { text: "You're ready" }), el("p", { text: "Scan · Detect · Secure" }));
           screen.append(hero);
           await api.wait(1200);
           api.hideTap();

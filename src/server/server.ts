@@ -590,7 +590,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         store.endScan(id);
       }
     }
-    // Protect = continuous monitoring. Turning it on is a standing authorization
+    // Monitor = continuous re-scanning. Turning it on is a standing authorization
     // to re-scan this asset on a schedule, so it is confirmed and recorded.
     if (idMatch[2] === "/monitor" && method === "POST") {
       const body = await readBody(req);
@@ -601,10 +601,10 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         if (!asset.lastScanAt) return json(res, 400, { error: "Scan it first, then protect it." });
         if (asset.shield === "new") return json(res, 400, { error: "The last scan could not reach it. Scan it again first." });
         if (asset.kind === "artifact") return json(res, 400, { error: "Forensic artifacts are examined once, not monitored." });
-        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: "Continuous protection (Protect)" });
+        store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: "Continuous monitoring (Monitor)" });
       }
       const updated = store.setMonitor(id, on);
-      if (updated && updated.monitor !== asset.monitor) store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: on ? "protect-on" : "protect-off", text: on ? `Protection turned on for ${asset.name}` : `Protection paused for ${asset.name}` });
+      if (updated && updated.monitor !== asset.monitor) store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: on ? "protect-on" : "protect-off", text: on ? `Monitoring turned on for ${asset.name}` : `Monitoring paused for ${asset.name}` });
       return json(res, 200, { asset: updated });
     }
     // Downloadable report of the last scan: ?format=html|md|json

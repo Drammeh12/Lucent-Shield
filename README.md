@@ -19,9 +19,11 @@ Lucent Shield watches the code and websites you own, tells you in plain words wh
 
 **Forensics.** Inspect a file or an artifact, capture its fingerprint, and surface anything that looks out of place.
 
-**Live dashboard.** A web app with a big padlock that beeps green and closed when every asset is protected, and red and open the moment one is exposed. Add a site and watch the scan run live, with the real findings streaming in, then press Secure to get the exact fix for each one and turn on continuous monitoring.
+**Live dashboard.** A web app with a big padlock on a shield: red and open when an asset is exposed, amber when it is monitored but serious fixes are waiting, green and closed when it is monitored and nothing serious was found. Add a site and watch the scan run live, with the real findings streaming in, then press Monitor.
 
-**Continuous monitoring.** Keep watching your assets on a schedule and get an alert when protection slips or recovers. Alerts show in the dashboard, and can also go to Slack or Discord.
+**Continuous monitoring.** After you press Monitor, it re-checks on a schedule and alerts you when things get worse or recover. Alerts show in the dashboard, and can also go to Slack or Discord. Monitoring finds problems; it does not change your site or block attackers.
+
+**Shielded on Bash Cloud.** Sites hosted on Bash Cloud sit behind Lucent Shield: every visit passes through it, which blocks common attacks in the address (SQL, script and command injection, path traversal), never serves secret files, limits password guessing and adds missing security headers. Lucent Shield recognises these sites when it scans them and shows them as **Shielded**.
 
 ## Reports
 
@@ -40,7 +42,7 @@ In the dashboard, open an asset's report and choose **Full assessment report (PD
 
 ## Guided video
 
-A narrated, animated walkthrough explains every part of the app: creating an account, the dashboard, choosing a scan, giving permission, proving you own a website, the live scan, the fixes and the report, Protect and what the padlock colours mean, alerts and activity, the Assets page, and two-step login. Open it with **Watch how Lucent Shield works** on the log in and sign-up pages, or **How it works** at the top of the dashboard. It also opens once by itself after a new account is created. Captions are always shown; the voice can be switched off.
+A narrated, animated walkthrough explains every part of the app: creating an account, the dashboard, choosing a scan, giving permission, proving you own a website, the live scan, the fixes and the report, Monitor and what the padlock colours mean, shielding on Bash Cloud, alerts and activity, the Assets page, and two-step login. Open it with **Watch how Lucent Shield works** on the log in and sign-up pages, or **How it works** at the top of the dashboard. It also opens once by itself after a new account is created. Captions are always shown; the voice can be switched off.
 
 ## Only test what you own
 

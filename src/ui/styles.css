@@ -546,3 +546,11 @@ a { color: var(--green); text-decoration: none; }
 @media (max-width: 640px) { .vpick { grid-template-columns: 1fr; } .vr { flex-direction: column; } }
 .set.danger { margin-top: 16px; border-color: color-mix(in srgb, var(--red) 35%, var(--line)); }
 .authbox .tsform .arow { margin-top: 6px; }
+
+/* show or hide password */
+.pw-wrap { position: relative; display: block; width: 100%; }
+.pw-wrap > input { width: 100%; padding-right: 42px !important; box-sizing: border-box; }
+.pw-eye { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); width: 32px; height: 32px; display: grid; place-items: center; background: none; border: 0; border-radius: 8px; color: currentColor; opacity: .6; cursor: pointer; padding: 0; }
+.pw-eye:hover { opacity: 1; }
+.pw-eye:focus-visible { opacity: 1; outline: 2px solid currentColor; outline-offset: 1px; }
+.pw-eye[aria-pressed="true"] { opacity: .95; }

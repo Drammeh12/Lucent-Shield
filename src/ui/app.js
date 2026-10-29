@@ -55,7 +55,7 @@
     </svg>`;
   }
 
-  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web", SHOW_TOUR = false, SHIELDED = false;
+  let ASSETS = [], ALERTS = [], UNREAD = 0, TOTAL_SCANS = 0, VIEW = "dashboard", polling = null, SEQ = false, ADMIN = false, ME = null, EVENTS = [], FOCUS = null, SCAN_KIND = "web", SHOW_TOUR = false, SHIELDED = false, PLAN = null;
 
   // The target icon that flows through the padlock. Web assets show the site's
   // real favicon (fetched server-side); repos and artifacts show a glyph.
@@ -83,6 +83,7 @@
         <div class="topbar">
           <div class="crumbs">Scan · Detect · <b>Secure</b></div>
           <div class="sp"></div>
+          <button type="button" class="planchip" id="planChip" hidden></button>
           ${watchBtn("watchTop")}
           <button class="iconbtn" id="bell">${ic("bell")}<span class="badge" id="bellBadge" hidden>0</span></button>
           <div class="user"><span class="av">${esc(initials(ME?.name || ME?.email))}</span><b>${esc(ME?.name || "")}</b>${ADMIN ? `<span class="tag secure">Admin</span>` : ""}</div>
@@ -98,7 +99,8 @@
     root.querySelector(".nav").onclick = (e) => { const a = e.target.closest("a"); if (a) { VIEW = a.dataset.view; shell(); renderView(); } };
     document.getElementById("bell").onclick = openAlerts;
     document.getElementById("watchTop").onclick = watchGuide;
-    setBell(UNREAD);
+    document.getElementById("planChip").onclick = openPlans;
+    setBell(UNREAD); setPlanChip();
   }
 
   function initials(n) { const p = String(n || "?").trim().split(/[\s@.]+/).filter(Boolean); return ((p[0]?.[0] || "?") + (p[1]?.[0] || "")).toUpperCase(); }
@@ -106,6 +108,55 @@
   /** The guided video. Opens wherever a "How it works" button is pressed. */
   function watchGuide() { if (window.LucentTour) window.LucentTour.open(); }
   const watchBtn = (id, label = "How it works") => `<button type="button" class="watch-btn" id="${id}"><span class="pl">▶</span>${label}</button>`;
+
+  // ---------- plans ----------
+  const naira = (n) => "₦" + Number(n).toLocaleString("en-NG");
+  const dollars = (n) => "$" + (Number.isInteger(n) ? n : Number(n).toFixed(2));
+  const daysLeft = (iso) => Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 86_400_000));
+  function setPlan(p) { if (p) { PLAN = p; setPlanChip(); } }
+  /** One line about the account's plan, for the top bar and Settings. */
+  function planLine(p = PLAN) {
+    if (!p) return "";
+    if (p.code === "admin") return p.name;
+    const left = p.scanLimit === null ? "" : `${Math.max(0, p.scanLimit - p.scansUsed)} of ${p.scanLimit} scans left`;
+    if (p.code === "welcome") return `Bash Cloud welcome: ${daysLeft(p.endsAt)} days free, ${left}`;
+    if (p.code === "free") return `Free: ${left}`;
+    return `${p.name}: ${left} this month`;
+  }
+  function setPlanChip() {
+    const c = document.getElementById("planChip"); if (!c) return;
+    c.hidden = !PLAN || PLAN.code === "admin";
+    if (!PLAN) return;
+    c.className = `planchip ${PLAN.code}`;
+    c.innerHTML = PLAN.code === "welcome" ? `${ic("shield", 14)} ${daysLeft(PLAN.endsAt)} days free` : PLAN.code === "free" ? `Free · ${Math.max(0, PLAN.scanLimit - PLAN.scansUsed)} scans left` : `${esc(PLAN.name)} plan`;
+  }
+  function openPlans() {
+    const p = PLAN; if (!p) return;
+    const card = (pl) => {
+      const cut = p.discount > 0;
+      const current = p.code === pl.code;
+      return `<div class="plan ${current ? "cur" : ""}"><div class="pn"><b>${esc(pl.name)}</b>${current ? `<span class="tag secure">Your plan</span>` : ""}</div>
+        <div class="pp"><span class="big">${naira(pl.price.ngn)}</span><span class="per">a month</span>${cut ? `<s>${naira(pl.ngn)}</s>` : ""}</div>
+        <div class="pu">or ${dollars(pl.price.usd)} a month by card${cut ? ` <s>${dollars(pl.usd)}</s>` : ""}</div>
+        <p>${esc(pl.blurb)}</p>
+        <ul><li>${pl.scans.toLocaleString()} scans a month</li><li>Monitor ${pl.monitored} ${pl.monitored === 1 ? "asset" : "assets"}, with alerts</li><li>Full assessment reports</li></ul>
+        <button class="btn" data-choose="${pl.code}" type="button">${current ? "Renew" : "Choose " + esc(pl.name)}</button></div>`;
+    };
+    const bc = p.bashCloud
+      ? `<div class="bcoffer on">${ic("shield", 20)}<div><b>You host on Bash Cloud</b><p>${p.code === "welcome" ? `Your welcome: Lucent Shield is free for ${daysLeft(p.endsAt)} more ${daysLeft(p.endsAt) === 1 ? "day" : "days"} (${p.welcome.scans} scans, ${p.welcome.monitored} monitored assets). After that, ` : ""}every plan is <b>${p.discount}% off</b> for you. Your Bash Cloud apps are also shielded live: attacks are blocked before they reach them.</p></div></div>`
+      : `<div class="bcoffer">${ic("shield", 20)}<div><b>Host on Bash Cloud: 14 days of Lucent Shield free</b><p>Apps hosted on Bash Cloud sit behind Lucent Shield, which blocks attacks before they reach them. Verify a site you host on Bash Cloud here and you get 14 days of Lucent Shield free (${p.welcome.scans} scans, ${p.welcome.monitored} monitored assets), then ${p.bashCloudDiscount}% off every plan.</p></div></div>`;
+    const usage = p.code === "admin" ? "" : `<div class="pusage"><div><span>Scans</span><b>${p.scansUsed} of ${p.scanLimit} used</b></div><div><span>Monitored</span><b>${p.monitored} of ${p.monitorLimit}</b></div>${p.endsAt ? `<div><span>${p.code === "welcome" ? "Free until" : "Paid until"}</span><b>${new Date(p.endsAt).toLocaleDateString()}</b></div>` : ""}${p.code === "free" && p.monitorEndsAt ? `<div><span>Free monitoring ends</span><b>${new Date(p.monitorEndsAt).toLocaleString()}</b></div>` : ""}</div>`;
+    const d = drawer(`<h2>Plans</h2><div class="sub">${esc(planLine(p))}</div>${usage}${bc}
+      <div class="plans">${p.plans.map(card).join("")}</div>
+      <p class="pfree">Everyone starts free: ${p.free.scans} scans and ${p.free.monitorHours} hours of monitoring for one asset. Prices are monthly; cancel any time.</p>
+      <div id="payNote" class="paynote" hidden></div>`);
+    d.querySelectorAll("[data-choose]").forEach((b) => { b.onclick = () => {
+      const n = d.querySelector("#payNote"); n.hidden = false;
+      const pl = p.plans.find((x) => x.code === b.dataset.choose);
+      n.innerHTML = p.payments ? "" : `<b>Online payment opens soon.</b> To start ${esc(pl.name)} now (${naira(pl.price.ngn)} a month), ${p.contact ? `email <a href="mailto:${esc(p.contact)}?subject=${encodeURIComponent("Lucent Shield " + pl.name + " plan")}">${esc(p.contact)}</a> from your account's email address` : "contact the Lucent Shield team"} and your plan is switched on as soon as payment arrives.`;
+      n.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }; });
+  }
 
   function setBell(n) { UNREAD = n; const b = document.getElementById("bellBadge"); if (b) { b.hidden = !n; b.textContent = n > 99 ? "99+" : n; } }
 
@@ -364,13 +415,13 @@
     renderView();
     SEQ = true;
     startLog(); setLock("scanning"); setTitle(`Scanning ${asset.name}…`);
-    const scanP = scanApi(asset.id, auth, asset.kind).then((r) => r, (ex) => ({ error: ex.message }));
+    const scanP = scanApi(asset.id, auth, asset.kind).then((r) => r, (ex) => ({ error: ex.message, code: ex.code }));
     for (const [c, t] of LOG_STEPS[asset.kind](asset.name)) { logLine(c, t); await wait(480); }
     logLine("run", "Scoring what was found…");
     const res = await scanP;
     await wait(350);
     const a = res?.asset;
-    if (!a) { logLine("bad", esc(res?.error || "The scan could not finish. Check the address and try again.")); setLock(lockState(asset)); SEQ = false; return; }
+    if (!a) { logLine("bad", esc(res?.error || "The scan could not finish. Check the address and try again.")); setLock(lockState(asset)); SEQ = false; if (res?.code === "plan_limit") openPlans(); return; }
     TOTAL_SCANS++;
     const findings = (a.findings || []).filter((f) => f.severity !== "info").sort((x, y) => SEVERITY_ORDER.indexOf(x.severity) - SEVERITY_ORDER.indexOf(y.severity));
     if (findings.length) {
@@ -406,7 +457,7 @@
     startLog(); setLock("securing"); setTitle(`Setting up monitoring for ${asset.name}…`);
     let a;
     try { a = (await api(`/api/assets/${asset.id}/monitor`, { method: "POST", body: { on: true, authorized: true } })).asset; }
-    catch (ex) { logLine("bad", esc(ex.message)); setLock(lockState(asset)); SEQ = false; return; }
+    catch (ex) { logLine("bad", esc(ex.message)); setLock(lockState(asset)); SEQ = false; if (ex.code === "plan_limit") openPlans(); return; }
     const steps = asset.kind === "web"
       ? ["Saving a baseline of the site's security settings", "Watching certificates, headers and public files", "Arming alerts for any change"]
       : ["Saving a baseline of the code's findings", "Watching for new secrets and vulnerable packages", "Arming alerts for any change"];
@@ -699,6 +750,7 @@
     const two = ME?.twoStep;
     return `<div class="set">
       <div class="kv"><span class="k">Account</span><span>${esc(ME?.name || "")} · ${esc(ME?.email || "")}</span></div>
+      ${PLAN && PLAN.code !== "admin" ? `<div class="kv"><span class="k">Plan</span><span>${esc(planLine())} <button class="ghost small" id="seePlans" type="button">See plans</button></span></div>` : ""}
       <div class="kv"><span class="k">Monitored assets</span><b>${watching} of ${ASSETS.length}</b></div>
       ${ADMIN ? `<div class="kv"><span class="k">Auto re-scan</span><span>On the server schedule (<code>LUCENT_SCAN_INTERVAL_MIN</code>)</span></div>
       <div class="kv"><span class="k">Alerts webhook</span><span>Set <code>LUCENT_ALERT_WEBHOOK</code> to also send to Slack/Discord</span></div>` : ""}
@@ -731,6 +783,7 @@
     const b = document.getElementById("logout");
     if (b) b.onclick = async () => { if (polling) clearInterval(polling); await api("/api/logout", { method: "POST" }); boot(); };
     const w = document.getElementById("watchSet"); if (w) w.onclick = watchGuide;
+    const sp = document.getElementById("seePlans"); if (sp) sp.onclick = openPlans;
     const da = document.getElementById("delAcct"); if (da) da.onclick = deleteAccount;
     const body = document.getElementById("tsBody");
     const err = () => `<div class="err" id="tsErr" role="alert"></div>`;
@@ -852,8 +905,10 @@
       </div>
       <div class="pnl adm-block">
         <div class="ph"><h3>${ic("key", 16)} Accounts</h3></div>
-        ${d.users.length ? `<div class="adm-table"><table><thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last login</th><th>Two-step</th><th>Assets</th><th>Scans</th></tr></thead><tbody>
-          ${d.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.admin ? ` <span class="tag secure">Admin</span>` : ""}</td><td>${esc(u.email)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.lastLoginAt ? timeAgo(u.lastLoginAt) : "never"}</td><td>${u.twoStep ? "On" : "Off"}</td><td>${u.assets}</td><td>${u.scans || 0}</td></tr>`).join("")}
+        ${d.users.length ? `<div class="adm-table"><table><thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last login</th><th>Two-step</th><th>Assets</th><th>Scans</th><th>Plan</th><th>Set plan after payment</th></tr></thead><tbody>
+          ${d.users.map((u) => `<tr data-uid="${esc(u.id)}"><td><b>${esc(u.name)}</b>${u.admin ? ` <span class="tag secure">Admin</span>` : ""}</td><td>${esc(u.email)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.lastLoginAt ? timeAgo(u.lastLoginAt) : "never"}</td><td>${u.twoStep ? "On" : "Off"}</td><td>${u.assets}</td><td>${u.scans || 0}</td>
+            <td>${esc(u.planName)}${u.planEnds ? `<div class="sub">until ${new Date(u.planEnds).toLocaleDateString()}</div>` : ""}${u.bashCloud ? `<div class="sub">Hosts on Bash Cloud</div>` : ""}</td>
+            <td>${u.admin ? "" : `<div class="setplan"><select data-plan>${["free", ...d.plans.map((x) => x.code)].map((c) => `<option value="${c}">${c === "free" ? "Free" : esc(d.plans.find((x) => x.code === c).name)}</option>`).join("")}</select><select data-months>${[1, 3, 6, 12].map((m) => `<option value="${m}">${m} mo</option>`).join("")}</select><button class="btn small" data-setplan type="button">Save</button></div>`}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty">No accounts yet.</div>`}
       </div>
       <div class="pnl adm-block">
@@ -881,12 +936,21 @@
           <div class="kv"><span class="k">Internal targets allowed</span>${yes(st.internalTargetsAllowed, false)}</div>
         </div>
       </div>`;
+    el.querySelectorAll("[data-setplan]").forEach((b) => { b.onclick = async () => {
+      const row = b.closest("tr");
+      const plan = row.querySelector("[data-plan]").value, months = Number(row.querySelector("[data-months]").value);
+      const email = row.children[1].textContent;
+      const ok = await confirmBox({ title: "Change plan", body: `<p>Set <b>${esc(email)}</b> to <b>${esc(plan === "free" ? "Free" : plan)}</b>${plan === "free" ? "" : ` for ${months} ${months === 1 ? "month" : "months"}`}? Do this only after their payment has arrived.</p>`, go: "Set plan" });
+      if (!ok) return;
+      try { await api("/api/admin/plan", { method: "POST", body: { userId: row.dataset.uid, plan, months } }); } catch (ex) { alert(ex.message); }
+      loadAdmin();
+    }; });
     el.querySelectorAll("[data-vr]").forEach((b) => { b.onclick = () => reviewOwnership(b.closest(".vr").dataset.id, b.dataset.vr === "approve"); });
   }
 
   // ---------- data ----------
   async function refresh() {
-    const d = await api("/api/assets"); ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0);
+    const d = await api("/api/assets"); ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); setPlan(d.plan);
     try { ALERTS = (await api("/api/alerts")).alerts; } catch {}
     try { EVENTS = (await api("/api/activity")).events; } catch {}
   }
@@ -898,13 +962,13 @@
     const tmp = document.createElement("div"); tmp.innerHTML = dashboardView();
     for (const sel of [".stats", ".cols"]) { const now = document.querySelector(`#view ${sel}`), next = tmp.querySelector(sel); if (now && next) now.replaceWith(next); }
   }
-  async function refreshCounts() { try { const d = await api("/api/assets"); TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); } catch {} }
+  async function refreshCounts() { try { const d = await api("/api/assets"); TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); setPlan(d.plan); } catch {} }
 
   async function poll() {
     if (SEQ || document.querySelector(".drawer")) return;
     let d; try { d = await api("/api/assets"); } catch { return; }
     const changed = JSON.stringify(d.assets.map((a) => [a.id, a.shield, a.counts, a.monitor, a.verified, a.lastScanAt])) !== JSON.stringify(ASSETS.map((a) => [a.id, a.shield, a.counts, a.monitor, a.verified, a.lastScanAt]));
-    ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0);
+    ASSETS = d.assets; TOTAL_SCANS = d.totalScans || 0; setBell(d.unread || 0); setPlan(d.plan);
     if (changed) { try { ALERTS = (await api("/api/alerts")).alerts; EVENTS = (await api("/api/activity")).events; } catch {} renderView(); }
   }
 

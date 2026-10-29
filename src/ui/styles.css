@@ -556,3 +556,26 @@ a { color: var(--green); text-decoration: none; }
 .pw-eye[aria-pressed="true"] { opacity: .95; }
 .selfshield { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 12px; font-weight: 600; margin-left: 12px; }
 .login .login-ss { margin: 12px 0 0; justify-content: center; display: flex; }
+
+/* ---------- plans ---------- */
+.planchip { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel2); color: var(--muted); font: 600 12.5px var(--font); cursor: pointer; }
+.planchip.welcome { color: var(--green); border-color: rgba(47,230,166,.35); background: rgba(47,230,166,.08); }
+.planchip.solo, .planchip.team, .planchip.business { color: var(--cyan); }
+.planchip:hover { border-color: var(--cyan); }
+.pusage { display: flex; flex-wrap: wrap; gap: 10px 26px; margin: 14px 0 18px; }
+.pusage span { display: block; color: var(--faint); font-size: 12px; } .pusage b { font-size: 14px; }
+.bcoffer { display: flex; gap: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel2); color: var(--cyan); margin-bottom: 18px; }
+.bcoffer.on { color: var(--green); border-color: rgba(47,230,166,.35); }
+.bcoffer svg { flex: none; margin-top: 2px; } .bcoffer b { color: var(--text); } .bcoffer p { margin: 4px 0 0; color: var(--muted); line-height: 1.5; font-size: 13.5px; }
+.plans { display: grid; gap: 12px; }
+.plan { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--panel); }
+.plan.cur { border-color: var(--green); }
+.plan .pn { display: flex; justify-content: space-between; align-items: center; font-size: 16px; }
+.plan .pp { margin-top: 8px; display: flex; align-items: baseline; gap: 8px; } .plan .big { font-size: 24px; font-weight: 700; } .plan .per { color: var(--muted); font-size: 13px; }
+.plan s { color: var(--faint); font-size: 13px; } .plan .pu { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.plan p { color: var(--muted); font-size: 13.5px; margin: 10px 0 6px; } .plan ul { margin: 0 0 12px; padding-left: 18px; color: var(--text); font-size: 13.5px; line-height: 1.7; }
+.pfree { color: var(--faint); font-size: 12.5px; margin-top: 14px; }
+.paynote { margin-top: 12px; padding: 14px; border-radius: 12px; background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); font-size: 13.5px; line-height: 1.5; }
+.paynote a { color: var(--cyan); }
+.setplan { display: flex; gap: 6px; align-items: center; } .setplan select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 6px; font-size: 12.5px; }
+@media (max-width: 640px) { .planchip { display: none; } }

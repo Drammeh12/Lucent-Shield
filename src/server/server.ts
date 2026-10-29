@@ -13,6 +13,8 @@ import { store, publicUser, type User } from "./store.ts";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, isAdminUser, scanOptionsFor } from "./access.ts";
 import { newTotpSecret, otpauthUri, verifyCode, newRecoveryCodes, hashRecovery } from "./totp.ts";
 import { startMonitor, summary } from "./monitor.ts";
+import { entitlement, scanBlocked, monitorBlocked, planView, hostedOnBashCloud, PAID_PLANS } from "./plans.ts";
+import type { Asset } from "./store.ts";
 import { isBlockedHost } from "../scanners/web.ts";
 import { runScan, isGitUrl, VERSION, type AssetKind } from "../engine.ts";
 import { classify } from "../catalog.ts";
@@ -234,6 +236,22 @@ async function verifyDomain(target: string, token: string): Promise<{ ok: boolea
 }
 
 
+/**
+ * After a website's ownership is proven or it is scanned: if it is hosted on
+ * Bash Cloud, the account becomes a Bash Cloud customer here (14 days free,
+ * then a discount). Only a verified site counts, so nobody can claim someone
+ * else's.
+ */
+async function noteBashCloud(userId: string, asset: Asset): Promise<void> {
+  const user = store.user(userId);
+  if (!user || user.bashCloud || asset.kind !== "web" || !asset.verified) return;
+  let host: string;
+  try { host = new URL(asset.target.includes("://") ? asset.target : `https://${asset.target}`).hostname.toLowerCase(); } catch { return; }
+  if (!(await hostedOnBashCloud(host, !!asset.shielded))) return;
+  store.updateUser(userId, (u) => { u.bashCloud ??= { since: new Date().toISOString(), host }; });
+  store.addEvent({ ownerId: userId, assetId: asset.id, assetName: asset.name, type: "verified", text: `${host} is hosted on Bash Cloud: your next 14 days of Lucent Shield are free` });
+}
+
 /** Everything the admin view shows, built from the stored data. */
 function adminOverview() {
   const assets = store.list();
@@ -260,7 +278,8 @@ function adminOverview() {
     },
     verifyRequests: assets.filter((a) => a.kind === "web" && !a.verified && a.verifyRequest?.status === "pending")
       .map((a) => ({ id: a.id, name: a.name, target: a.target, owner: users.find((u) => u.id === a.ownerId)?.email ?? null, ...a.verifyRequest })),
-    users: users.map((u) => ({ ...publicUser(u), admin: isAdminUser(u), assets: assets.filter((a) => a.ownerId === u.id).length })),
+    users: users.map((u) => { const e = entitlement(u, isAdminUser(u)); return { ...publicUser(u), admin: isAdminUser(u), assets: assets.filter((a) => a.ownerId === u.id).length, planName: e.name, planCode: e.code, planEnds: e.endsAt, bashCloud: !!u.bashCloud }; }),
+    plans: PAID_PLANS.map((p) => ({ code: p.code, name: p.name })),
     assets: assets.map(({ findings, verifyToken, verifyRequest, ...a }) => ({ ...a, owner: users.find((u) => u.id === a.ownerId)?.email ?? null })),
     authorizations: store.listAuthorizations(200),
     logins,
@@ -485,11 +504,30 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       const approve = body.approve === true;
       const reason = String(body.reason ?? "").trim().slice(0, 300);
       store.reviewVerifyRequest(a.id, approve, reason, user.email);
+      if (approve && a.ownerId) { const v = store.get(a.id); if (v) await noteBashCloud(a.ownerId, v); }
       if (a.ownerId) store.addEvent({ ownerId: a.ownerId, assetId: a.id, assetName: a.name, type: approve ? "verified" : "added", text: approve ? `Ownership of ${a.name} confirmed by the Lucent Shield team` : `Ownership of ${a.name} could not be confirmed${reason ? `: ${reason}` : ""}` });
       store.logAuthorization({ assetId: a.id, name: a.name, kind: a.kind, target: a.target, ip: clientIp(req), userId: user.id, email: user.email, reference: approve ? "Ownership approved on manual review" : "Ownership declined on manual review" });
       return json(res, 200, { ok: true });
     }
     if (path === "/api/admin/overview" && method === "GET") return json(res, 200, adminOverview());
+    // Until online payment is on: after a customer pays, the admin sets their plan here.
+    if (path === "/api/admin/plan" && method === "POST") {
+      const body = await readBody(req);
+      const target = store.user(String(body.userId ?? ""));
+      if (!target) return json(res, 404, { error: "No such account." });
+      const code = String(body.plan ?? "");
+      const months = Math.floor(Number(body.months ?? 1));
+      if (code === "free") store.updateUser(target.id, (u) => { delete u.plan; });
+      else {
+        const plan = PAID_PLANS.find((p) => p.code === code);
+        if (!plan || !(months >= 1 && months <= 24)) return json(res, 400, { error: "Choose a plan and 1 to 24 months." });
+        // More months of the same plan add on; a different plan starts today.
+        const from = target.plan?.code === plan.code ? Math.max(Date.now(), Date.parse(target.plan.paidUntil)) : Date.now();
+        store.updateUser(target.id, (u) => { u.plan = { code: plan.code, paidUntil: new Date(from + months * 30 * 86_400_000).toISOString() }; });
+      }
+      store.logAuthorization({ assetId: "-", name: "Plan change", kind: "plan", target: target.email, ip: clientIp(req), userId: user.id, email: user.email, reference: code === "free" ? "Set to Free" : `${code}, ${months} month(s)` });
+      return json(res, 200, { ok: true });
+    }
     if (path === "/api/admin/audit.json" && method === "GET") {
       return json(res, 200, store.listAuthorizations(), { "Content-Disposition": `attachment; filename="lucent-authorizations-${new Date().toISOString().slice(0, 10)}.json"` });
     }
@@ -509,7 +547,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   }
 
   if (path === "/api/assets" && method === "GET") {
-    return json(res, 200, { assets: store.list(user.id).map(({ findings, ...a }) => a), unread: store.unreadAlerts(user.id), totalScans: user.scans ?? 0 });
+    const list = store.list(user.id);
+    return json(res, 200, { assets: list.map(({ findings, ...a }) => a), unread: store.unreadAlerts(user.id), totalScans: user.scans ?? 0, plan: planView(user, admin, list.filter((a) => a.monitor).length) });
   }
 
   if (path === "/api/assets" && method === "POST") {
@@ -558,8 +597,9 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       if (asset.verified) return json(res, 200, { verified: true, method: "already" });
       const r = await verifyDomain(asset.target, asset.verifyToken);
       if (r.ok) {
-        store.setVerified(id, true);
+        const v = store.setVerified(id, true);
         store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: "verified", text: `Ownership of ${asset.name} proven (${r.method === "dns" ? "DNS record" : "file on the site"})` });
+        if (v) await noteBashCloud(user.id, v);
         return json(res, 200, { verified: true, method: r.method });
       }
       return json(res, 200, { verified: false });
@@ -581,12 +621,17 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       if (asset.kind === "artifact" && (body.legal !== true || !String(body.reference ?? "").trim())) {
         return json(res, 403, { error: "Forensic examination requires a legal attestation and an authorization reference." });
       }
+      const ent = entitlement(user, admin);
+      const over = scanBlocked(ent);
+      if (over) return json(res, 402, { error: over, code: "plan_limit" });
       if (!store.beginScan(id)) return json(res, 409, { error: "This asset is already being scanned. Wait for it to finish." });
       try {
         store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: String(body.reference ?? "").trim().slice(0, 200) || undefined });
         const result = await runScan(asset.kind, asset.target, scanOptionsFor(asset.ownerId));
         const updated = store.saveScan(id, result);
+        if (ent.period !== "none") store.countScan(user.id, ent.period);
         if (updated) store.addEvent({ ownerId: user.id, assetId: id, assetName: asset.name, type: "scan", shield: updated.shield, text: `Scanned ${asset.name}: ${summary(updated)}` });
+        if (updated) await noteBashCloud(user.id, updated);
         return json(res, 200, { asset: updated });
       } finally {
         store.endScan(id);
@@ -603,6 +648,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         if (!asset.lastScanAt) return json(res, 400, { error: "Scan it first, then protect it." });
         if (asset.shield === "new") return json(res, 400, { error: "The last scan could not reach it. Scan it again first." });
         if (asset.kind === "artifact") return json(res, 400, { error: "Forensic artifacts are examined once, not monitored." });
+        if (!asset.monitor) {
+          const ent = entitlement(user, admin);
+          const over = monitorBlocked(ent, store.list(user.id).filter((a) => a.monitor).length);
+          if (over) return json(res, 402, { error: over, code: "plan_limit" });
+          if (ent.code === "free" && !user.freeMonitorAt) store.updateUser(user.id, (u) => { u.freeMonitorAt = new Date().toISOString(); });
+        }
         store.logAuthorization({ assetId: asset.id, name: asset.name, kind: asset.kind, target: asset.target, ip: clientIp(req), userId: user.id, email: user.email, reference: "Continuous monitoring (Monitor)" });
       }
       const updated = store.setMonitor(id, on);

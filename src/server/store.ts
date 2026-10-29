@@ -24,6 +24,14 @@ export interface User {
   totp?: { secret: string; lastStep: number; recovery: string[]; enabledAt: string };
   /** A secret being set up, not active until a code from it is confirmed. */
   totpPending?: { secret: string; at: string };
+  /** A paid plan and the day it runs until (set after payment). */
+  plan?: { code: "solo" | "team" | "business"; paidUntil: string };
+  /** The account proved it owns a site hosted on Bash Cloud (starts the 14-day welcome). */
+  bashCloud?: { since: string; host: string };
+  /** Scans run by hand in the current period (free, welcome, or a month). */
+  usage?: { period: string; scans: number };
+  /** Free plan: when its 24 hours of monitoring started. */
+  freeMonitorAt?: string;
 }
 
 /** What is safe to send to a browser about a user. */
@@ -193,6 +201,13 @@ export const store = {
     change(u);
     persistUsers(users);
     return u;
+  },
+  /** Counts one scan run by hand in the account's current period. */
+  countScan(id: string, period: string): void {
+    this.updateUser(id, (u) => {
+      if (u.usage?.period !== period) u.usage = { period, scans: 0 };
+      u.usage.scans++;
+    });
   },
   setTotpPending(id: string, secret: string): void {
     this.updateUser(id, (u) => { u.totpPending = { secret, at: new Date().toISOString() }; });

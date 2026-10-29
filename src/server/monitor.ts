@@ -5,7 +5,8 @@
 // also POSTed to that URL (works with Slack, Discord or any webhook).
 
 import { store, type Asset } from "./store.ts";
-import { scanOptionsFor } from "./access.ts";
+import { scanOptionsFor, isAdminUser } from "./access.ts";
+import { entitlement, monitorActive } from "./plans.ts";
 import { runScan, type Shield } from "../engine.ts";
 
 const INTERVAL_MIN = Math.max(5, Number(process.env.LUCENT_SCAN_INTERVAL_MIN) || 360);
@@ -93,6 +94,13 @@ async function tick(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    // A free account's day of monitoring is over: pause it and say so.
+    for (const a of store.list().filter((x) => x.monitor && x.ownerId)) {
+      const owner = store.user(a.ownerId!);
+      if (!owner || monitorActive(entitlement(owner, isAdminUser(owner)))) continue;
+      store.setMonitor(a.id, false);
+      store.addEvent({ ownerId: owner.id, assetId: a.id, assetName: a.name, type: "protect-off", text: `Monitoring of ${a.name} paused: the free day ended. Choose a plan to keep it monitored.` });
+    }
     const due = store.list().filter(dueForScan).slice(0, MAX_PER_TICK);
     for (const asset of due) {
       try {
